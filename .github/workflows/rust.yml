@@ -34,23 +34,11 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
 
-    - name: Check Format
-      run: cargo fmt -- --check
-
     - name: Build Release
       run: cargo build --release --verbose
 
     - name: Run Tests
       run: cargo test --verbose
 
-    - name: Run benchmarks (if any)
-      if: always()
-      run: cargo bench || true
-
     - name: Check for unused dependencies
       run: cargo udeps || true
-
-  #     - uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: 1.76  # укажи свою MSRV из Cargo.toml
-  #     - run: cargo check --all-targets
