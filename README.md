@@ -5,7 +5,6 @@
 # GOTO
 - [Features](#features)
 - [Quick Start Guide](#quick-start-guide)
-  - [Build](#build)
 - [How to use?](#how-to-use)
   - [Systemd Method](#telemt-via-systemd)
 - [Configuration](#configuration)
@@ -18,6 +17,7 @@
   - [Telegram Calls](#telegram-calls-via-mtproxy)
   - [DPI](#how-does-dpi-see-mtproxy-tls)
   - [Whitelist on Network Level](#whitelist-on-ip)
+- [Build](#build)
 - [Why Rust?](#why-rust)
 
 ## Features
@@ -47,6 +47,7 @@ mv telemt /bin
 chmod +x /bin/telemt
 ```
 5. Go to [How to use?](#how-to-use) section for for further steps
+
 ## How to use?
 ### Telemt via Systemd
 **0. Check port and generate secrets**
