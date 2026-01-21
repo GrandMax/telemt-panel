@@ -258,8 +258,13 @@ we transparently direct traffic to the target host!
   - `petrovich.ru` - `tls` + `masking` host, in HEX: `706574726f766963682e7275`
   - client WITH secret-key accesses the MTProxy resource:
   <img width="360" height="439" alt="telemt" src="https://github.com/user-attachments/assets/39352afb-4a11-4ecc-9d91-9e8cfb20607d" />
+
   
   - client WITHOUT secret-key gets transparent access to the specified resource:
+    - with trusted certificate
+    - with original handshake
+    - with full request-response way
+    - with low-latency overhead
 ```bash
 root@debian:~/telemt# curl -v -I --resolve petrovich.ru:443:212.220.88.77 https://petrovich.ru/
 * Added petrovich.ru:443:212.220.88.77 to DNS cache
