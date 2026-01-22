@@ -4,7 +4,7 @@
 
 💥 The configuration structure has changed since version 1.1.0.0, change it in your environment!
 
-⚓ Our implementation of **TLS-fronting** is the most debugged, advanced and *almost* **"indistinguishable from the original"**:  we are confident we have it right - [see our evidence](#recognizability-for-dpi-and-crawler) 
+⚓ Our implementation of **TLS-fronting** is the most debugged, advanced and *almost* **"behaviorally consistent to real"**:  we are confident we have it right - [see our evidence](#recognizability-for-dpi-and-crawler) 
 
 # GOTO
 - [Features](#features)
