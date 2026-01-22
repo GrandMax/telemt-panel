@@ -334,6 +334,7 @@ Keep-Alive: timeout=60
 * Connection #0 to host petrovich.ru left intact
 
 ```
+- Do not just take our word for it? - This is great and we respect that: you can build your own `telemt` or download a build and check it right now
 ### Telegram Calls via MTProxy
 - Telegram architecture **does NOT allow calls via MTProxy**, but only via SOCKS5, which cannot be obfuscated
 ### How does DPI see MTProxy TLS?
