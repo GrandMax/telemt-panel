@@ -1,4 +1,4 @@
-//! Upstream Management with RTT tracking and startup ping
+//! Upstream Management with per-DC latency-weighted selection
 
 use std::net::{SocketAddr, IpAddr};
 use std::sync::Arc;
@@ -7,7 +7,7 @@ use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::time::Instant;
 use rand::Rng;
-use tracing::{debug, warn, error, info};
+use tracing::{debug, warn, info, trace};
 
 use crate::config::{UpstreamConfig, UpstreamType};
 use crate::error::{Result, ProxyError};
@@ -15,19 +15,19 @@ use crate::protocol::constants::{TG_DATACENTERS_V4, TG_DATACENTERS_V6, TG_DATACE
 use crate::transport::socket::create_outgoing_socket_bound;
 use crate::transport::socks::{connect_socks4, connect_socks5};
 
+/// Number of Telegram datacenters
+const NUM_DCS: usize = 5;
+
 // ============= RTT Tracking =============
 
-/// Exponential moving average for latency tracking
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct LatencyEma {
-    /// Current EMA value in milliseconds (None = no data yet)
     value_ms: Option<f64>,
-    /// Smoothing factor (0.0 - 1.0, higher = more weight to recent)
     alpha: f64,
 }
 
 impl LatencyEma {
-    fn new(alpha: f64) -> Self {
+    const fn new(alpha: f64) -> Self {
         Self { value_ms: None, alpha }
     }
     
@@ -51,8 +51,43 @@ struct UpstreamState {
     healthy: bool,
     fails: u32,
     last_check: std::time::Instant,
-    /// Latency EMA (alpha=0.3 — moderate smoothing)
-    latency: LatencyEma,
+    /// Per-DC latency EMA (index 0 = DC1, index 4 = DC5)
+    dc_latency: [LatencyEma; NUM_DCS],
+}
+
+impl UpstreamState {
+    fn new(config: UpstreamConfig) -> Self {
+        Self {
+            config,
+            healthy: true,
+            fails: 0,
+            last_check: std::time::Instant::now(),
+            dc_latency: [LatencyEma::new(0.3); NUM_DCS],
+        }
+    }
+    
+    /// Convert dc_idx (1-based, may be negative) to array index 0..4
+    fn dc_array_idx(dc_idx: i16) -> Option<usize> {
+        let idx = (dc_idx.unsigned_abs() as usize).checked_sub(1)?;
+        if idx < NUM_DCS { Some(idx) } else { None }
+    }
+    
+    /// Get latency for a specific DC, falling back to average across all known DCs
+    fn effective_latency(&self, dc_idx: Option<i16>) -> Option<f64> {
+        // Try DC-specific latency first
+        if let Some(di) = dc_idx.and_then(Self::dc_array_idx) {
+            if let Some(ms) = self.dc_latency[di].get() {
+                return Some(ms);
+            }
+        }
+        
+        // Fallback: average of all known DC latencies
+        let (sum, count) = self.dc_latency.iter()
+            .filter_map(|l| l.get())
+            .fold((0.0, 0u32), |(s, c), v| (s + v, c + 1));
+        
+        if count > 0 { Some(sum / count as f64) } else { None }
+    }
 }
 
 /// Result of a single DC ping
@@ -64,7 +99,7 @@ pub struct DcPingResult {
     pub error: Option<String>,
 }
 
-/// Result of startup ping across all DCs
+/// Result of startup ping for one upstream
 #[derive(Debug, Clone)]
 pub struct StartupPingResult {
     pub results: Vec<DcPingResult>,
@@ -82,13 +117,7 @@ impl UpstreamManager {
     pub fn new(configs: Vec<UpstreamConfig>) -> Self {
         let states = configs.into_iter()
             .filter(|c| c.enabled)
-            .map(|c| UpstreamState {
-                config: c,
-                healthy: true,
-                fails: 0,
-                last_check: std::time::Instant::now(),
-                latency: LatencyEma::new(0.3),
-            })
+            .map(UpstreamState::new)
             .collect();
             
         Self {
@@ -96,46 +125,78 @@ impl UpstreamManager {
         }
     }
     
-    /// Select an upstream using weighted selection among healthy upstreams
-    async fn select_upstream(&self) -> Option<usize> {
+    /// Select upstream using latency-weighted random selection.
+    ///
+    /// `effective_weight = config_weight × latency_factor`
+    ///
+    /// where `latency_factor = 1000 / latency_ms` if latency is known,
+    /// or `1.0` if no latency data is available.
+    ///
+    /// This means a 50ms upstream gets factor 20, a 200ms upstream gets
+    /// factor 5 — the faster route is 4× more likely to be chosen
+    /// (all else being equal).
+    async fn select_upstream(&self, dc_idx: Option<i16>) -> Option<usize> {
         let upstreams = self.upstreams.read().await;
         if upstreams.is_empty() {
             return None;
         }
 
-        let healthy_indices: Vec<usize> = upstreams.iter()
+        let healthy: Vec<usize> = upstreams.iter()
             .enumerate()
             .filter(|(_, u)| u.healthy)
             .map(|(i, _)| i)
             .collect();
             
-        if healthy_indices.is_empty() {
+        if healthy.is_empty() {
+            // All unhealthy — pick any
             return Some(rand::rng().gen_range(0..upstreams.len()));
         }
         
-        let total_weight: u32 = healthy_indices.iter()
-            .map(|&i| upstreams[i].config.weight as u32)
-            .sum();
-            
-        if total_weight == 0 {
-            return Some(healthy_indices[rand::rng().gen_range(0..healthy_indices.len())]);
+        if healthy.len() == 1 {
+            return Some(healthy[0]);
         }
         
-        let mut choice = rand::rng().gen_range(0..total_weight);
+        // Calculate latency-weighted scores
+        let weights: Vec<(usize, f64)> = healthy.iter().map(|&i| {
+            let base = upstreams[i].config.weight as f64;
+            let latency_factor = upstreams[i].effective_latency(dc_idx)
+                .map(|ms| if ms > 1.0 { 1000.0 / ms } else { 1000.0 })
+                .unwrap_or(1.0);
+            
+            (i, base * latency_factor)
+        }).collect();
         
-        for &idx in &healthy_indices {
-            let weight = upstreams[idx].config.weight as u32;
+        let total: f64 = weights.iter().map(|(_, w)| w).sum();
+        
+        if total <= 0.0 {
+            return Some(healthy[rand::rng().gen_range(0..healthy.len())]);
+        }
+        
+        let mut choice: f64 = rand::rng().gen_range(0.0..total);
+        
+        for &(idx, weight) in &weights {
             if choice < weight {
+                trace!(
+                    upstream = idx,
+                    dc = ?dc_idx,
+                    weight = format!("{:.2}", weight),
+                    total = format!("{:.2}", total),
+                    "Upstream selected"
+                );
                 return Some(idx);
             }
             choice -= weight;
         }
         
-        Some(healthy_indices[0])
+        Some(healthy[0])
     }
     
-    pub async fn connect(&self, target: SocketAddr) -> Result<TcpStream> {
-        let idx = self.select_upstream().await
+    /// Connect to target through a selected upstream.
+    ///
+    /// `dc_idx` is used for latency-based upstream selection and RTT tracking.
+    /// Pass `None` if DC index is unknown.
+    pub async fn connect(&self, target: SocketAddr, dc_idx: Option<i16>) -> Result<TcpStream> {
+        let idx = self.select_upstream(dc_idx).await
             .ok_or_else(|| ProxyError::Config("No upstreams available".to_string()))?;
             
         let upstream = {
@@ -151,11 +212,15 @@ impl UpstreamManager {
                 let mut guard = self.upstreams.write().await;
                 if let Some(u) = guard.get_mut(idx) {
                     if !u.healthy {
-                        debug!(rtt_ms = rtt_ms, "Upstream recovered: {:?}", u.config);
+                        debug!(rtt_ms = format!("{:.1}", rtt_ms), "Upstream recovered");
                     }
                     u.healthy = true;
                     u.fails = 0;
-                    u.latency.update(rtt_ms);
+                    
+                    // Store per-DC latency
+                    if let Some(di) = dc_idx.and_then(UpstreamState::dc_array_idx) {
+                        u.dc_latency[di].update(rtt_ms);
+                    }
                 }
                 Ok(stream)
             },
@@ -163,10 +228,10 @@ impl UpstreamManager {
                 let mut guard = self.upstreams.write().await;
                 if let Some(u) = guard.get_mut(idx) {
                     u.fails += 1;
-                    warn!("Upstream {:?} failed: {}. Consecutive fails: {}", u.config, e, u.fails);
+                    warn!(fails = u.fails, "Upstream failed: {}", e);
                     if u.fails > 3 {
                         u.healthy = false;
-                        warn!("Upstream marked unhealthy: {:?}", u.config);
+                        warn!("Upstream marked unhealthy");
                     }
                 }
                 Err(e)
@@ -200,8 +265,6 @@ impl UpstreamManager {
                 Ok(stream)
             },
             UpstreamType::Socks4 { address, interface, user_id } => {
-                info!("Connecting to {} via SOCKS4 {}", target, address);
-                
                 let proxy_addr: SocketAddr = address.parse()
                     .map_err(|_| ProxyError::Config("Invalid SOCKS4 address".to_string()))?;
                     
@@ -229,8 +292,6 @@ impl UpstreamManager {
                 Ok(stream)
             },
             UpstreamType::Socks5 { address, interface, username, password } => {
-                info!("Connecting to {} via SOCKS5 {}", target, address);
-                
                 let proxy_addr: SocketAddr = address.parse()
                     .map_err(|_| ProxyError::Config("Invalid SOCKS5 address".to_string()))?;
                     
@@ -262,9 +323,7 @@ impl UpstreamManager {
     
     // ============= Startup Ping =============
     
-    /// Ping all Telegram DCs through all upstreams and return results.
-    ///
-    /// Used at startup to display connectivity and latency info.
+    /// Ping all Telegram DCs through all upstreams.
     pub async fn ping_all_dcs(&self, prefer_ipv6: bool) -> Vec<StartupPingResult> {
         let upstreams: Vec<(usize, UpstreamConfig)> = {
             let guard = self.upstreams.read().await;
@@ -298,10 +357,10 @@ impl UpstreamManager {
                 
                 let result = match ping_result {
                     Ok(Ok(rtt_ms)) => {
-                        // Update latency EMA
+                        // Store per-DC latency
                         let mut guard = self.upstreams.write().await;
                         if let Some(u) = guard.get_mut(*upstream_idx) {
-                            u.latency.update(rtt_ms);
+                            u.dc_latency[dc_zero_idx].update(rtt_ms);
                         }
                         DcPingResult {
                             dc_idx: dc_zero_idx + 1,
@@ -336,33 +395,26 @@ impl UpstreamManager {
         all_results
     }
     
-    /// Ping a single DC: TCP connect, measure RTT, then drop.
     async fn ping_single_dc(&self, config: &UpstreamConfig, target: SocketAddr) -> Result<f64> {
         let start = Instant::now();
         let _stream = self.connect_via_upstream(config, target).await?;
-        let rtt = start.elapsed();
-        Ok(rtt.as_secs_f64() * 1000.0)
+        Ok(start.elapsed().as_secs_f64() * 1000.0)
     }
     
     // ============= Health Checks =============
     
-    /// Background health check task.
-    ///
-    /// Every 30 seconds, pings one representative DC per upstream.
-    /// Measures RTT and updates health status.
+    /// Background health check: rotates through DCs, 30s interval.
     pub async fn run_health_checks(&self, prefer_ipv6: bool) {
         let datacenters = if prefer_ipv6 { &*TG_DATACENTERS_V6 } else { &*TG_DATACENTERS_V4 };
-        
-        // Rotate through DCs across check cycles
         let mut dc_rotation = 0usize;
         
         loop {
             tokio::time::sleep(Duration::from_secs(30)).await;
             
-            let check_dc_idx = dc_rotation % datacenters.len();
+            let dc_zero_idx = dc_rotation % datacenters.len();
             dc_rotation += 1;
             
-            let check_target = SocketAddr::new(datacenters[check_dc_idx], TG_DATACENTER_PORT);
+            let check_target = SocketAddr::new(datacenters[dc_zero_idx], TG_DATACENTER_PORT);
             
             let count = self.upstreams.read().await.len();
             for i in 0..count {
@@ -383,13 +435,13 @@ impl UpstreamManager {
                 match result {
                     Ok(Ok(_stream)) => {
                         let rtt_ms = start.elapsed().as_secs_f64() * 1000.0;
-                        u.latency.update(rtt_ms);
+                        u.dc_latency[dc_zero_idx].update(rtt_ms);
                         
                         if !u.healthy {
                             info!(
-                                rtt_ms = format!("{:.1}", rtt_ms),
-                                dc = check_dc_idx + 1,
-                                "Upstream recovered: {:?}", u.config
+                                rtt = format!("{:.0}ms", rtt_ms),
+                                dc = dc_zero_idx + 1,
+                                "Upstream recovered"
                             );
                         }
                         u.healthy = true;
@@ -397,26 +449,20 @@ impl UpstreamManager {
                     }
                     Ok(Err(e)) => {
                         u.fails += 1;
-                        debug!(
-                            dc = check_dc_idx + 1,
-                            fails = u.fails,
-                            "Health check failed for {:?}: {}", u.config, e
-                        );
+                        debug!(dc = dc_zero_idx + 1, fails = u.fails,
+                            "Health check failed: {}", e);
                         if u.fails > 3 {
                             u.healthy = false;
-                            warn!("Upstream unhealthy (health check): {:?}", u.config);
+                            warn!("Upstream unhealthy (fails)");
                         }
                     }
                     Err(_) => {
                         u.fails += 1;
-                        debug!(
-                            dc = check_dc_idx + 1,
-                            fails = u.fails,
-                            "Health check timeout for {:?}", u.config
-                        );
+                        debug!(dc = dc_zero_idx + 1, fails = u.fails,
+                            "Health check timeout");
                         if u.fails > 3 {
                             u.healthy = false;
-                            warn!("Upstream unhealthy (timeout): {:?}", u.config);
+                            warn!("Upstream unhealthy (timeout)");
                         }
                     }
                 }
