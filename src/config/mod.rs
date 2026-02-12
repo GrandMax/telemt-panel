@@ -43,7 +43,8 @@ pub enum LogLevel {
     #[default]
     Normal,
     /// Minimal output: only warnings and errors (warn + error).
-    /// Proxy links are still printed to stdout via println!.
+    /// Startup messages (config, DC connectivity, proxy links) are always shown
+    /// via info! before the filter is applied.
     Silent,
 }
 
@@ -57,7 +58,7 @@ impl LogLevel {
             LogLevel::Silent => "warn",
         }
     }
-    
+
     /// Parse from a loose string (CLI argument)
     pub fn from_str_loose(s: &str) -> Self {
         match s.to_lowercase().as_str() {

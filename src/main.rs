@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tracing::{info, error, warn, debug};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{fmt, EnvFilter, reload, prelude::*};
 
 mod cli;
 mod config;
@@ -105,6 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
+    let has_rust_log = std::env::var("RUST_LOG").is_ok();
     let effective_log_level = if cli_silent {
         LogLevel::Silent
     } else if let Some(ref s) = cli_log_level {
@@ -112,15 +113,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         config.general.log_level.clone()
     };
-    
-    let filter = if std::env::var("RUST_LOG").is_ok() {
-        EnvFilter::from_default_env()
-    } else {
-        EnvFilter::new(effective_log_level.to_filter_str())
-    };
-    
-    fmt().with_env_filter(filter).init();
-    
+
+    // Start with INFO so startup messages are always visible,
+    // then switch to user-configured level after startup
+    let (filter_layer, filter_handle) = reload::Layer::new(EnvFilter::new("info"));
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt::Layer::default())
+        .init();
+
     info!("Telemt MTProxy v{}", env!("CARGO_PKG_VERSION"));
     info!("Log level: {}", effective_log_level);
     info!("Modes: classic={} secure={} tls={}",
@@ -132,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.censorship.mask,
         config.censorship.mask_host.as_deref().unwrap_or(&config.censorship.tls_domain),
         config.censorship.mask_port);
-    
+
     if config.censorship.tls_domain == "www.google.com" {
         warn!("Using default tls_domain. Consider setting a custom domain.");
     }
@@ -151,25 +152,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let buffer_pool = Arc::new(BufferPool::with_config(16 * 1024, 4096));
     
     // Startup DC ping
-    println!("=== Telegram DC Connectivity ===");
+    info!("=== Telegram DC Connectivity ===");
     let ping_results = upstream_manager.ping_all_dcs(prefer_ipv6).await;
     for upstream_result in &ping_results {
-        println!("  via {}", upstream_result.upstream_name);
+        info!("  via {}", upstream_result.upstream_name);
         for dc in &upstream_result.results {
             match (&dc.rtt_ms, &dc.error) {
                 (Some(rtt), _) => {
-                    println!("    DC{} ({:>21}):  {:.0}ms", dc.dc_idx, dc.dc_addr, rtt);
+                    info!("    DC{} ({:>21}):  {:.0}ms", dc.dc_idx, dc.dc_addr, rtt);
                 }
                 (None, Some(err)) => {
-                    println!("    DC{} ({:>21}):  FAIL ({})", dc.dc_idx, dc.dc_addr, err);
+                    info!("    DC{} ({:>21}):  FAIL ({})", dc.dc_idx, dc.dc_addr, err);
                 }
                 _ => {
-                    println!("    DC{} ({:>21}):  FAIL", dc.dc_idx, dc.dc_addr);
+                    info!("    DC{} ({:>21}):  FAIL", dc.dc_idx, dc.dc_addr);
                 }
             }
         }
     }
-    println!("================================");
+    info!("================================");
     
     // Background tasks
     let um_clone = upstream_manager.clone();
@@ -208,28 +209,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 if !config.show_link.is_empty() {
-                    println!("--- Proxy Links ({}) ---", public_ip);
+                    info!("--- Proxy Links ({}) ---", public_ip);
                     for user_name in &config.show_link {
                         if let Some(secret) = config.access.users.get(user_name) {
-                            println!("[{}]", user_name);
+                            info!("User: {}", user_name);
                             if config.general.modes.classic {
-                                println!("  Classic: tg://proxy?server={}&port={}&secret={}",
+                                info!("  Classic: tg://proxy?server={}&port={}&secret={}",
                                     public_ip, config.server.port, secret);
                             }
                             if config.general.modes.secure {
-                                println!("  DD:      tg://proxy?server={}&port={}&secret=dd{}",
+                                info!("  DD:      tg://proxy?server={}&port={}&secret=dd{}",
                                     public_ip, config.server.port, secret);
                             }
                             if config.general.modes.tls {
                                 let domain_hex = hex::encode(&config.censorship.tls_domain);
-                                println!("  EE-TLS:  tg://proxy?server={}&port={}&secret=ee{}{}",
+                                info!("  EE-TLS:  tg://proxy?server={}&port={}&secret=ee{}{}",
                                     public_ip, config.server.port, secret, domain_hex);
                             }
                         } else {
                             warn!("User '{}' in show_link not found", user_name);
                         }
                     }
-                    println!("------------------------");
+                    info!("------------------------");
                 }
                 
                 listeners.push(listener);
@@ -244,6 +245,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         error!("No listeners. Exiting.");
         std::process::exit(1);
     }
+
+    // Switch to user-configured log level after startup
+    let runtime_filter = if has_rust_log {
+        EnvFilter::from_default_env()
+    } else {
+        EnvFilter::new(effective_log_level.to_filter_str())
+    };
+    filter_handle.reload(runtime_filter).expect("Failed to switch log filter");
 
     for listener in listeners {
         let config = config.clone();
