@@ -116,6 +116,11 @@ pub struct GeneralConfig {
 
     #[serde(default)]
     pub ad_tag: Option<String>,
+
+    /// Path to proxy-secret binary file (auto-downloaded if absent).
+    /// Infrastructure secret from https://core.telegram.org/getProxySecret
+    #[serde(default)]
+    pub proxy_secret_path: Option<String>,
     
     #[serde(default)]
     pub log_level: LogLevel,
@@ -129,6 +134,7 @@ impl Default for GeneralConfig {
             fast_mode: true,
             use_middle_proxy: false,
             ad_tag: None,
+            proxy_secret_path: None,
             log_level: LogLevel::Normal,
         }
     }
