@@ -1,32 +1,55 @@
 //! Configuration
 
+use crate::error::{ProxyError, Result};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use crate::error::{ProxyError, Result};
 
 // ============= Helper Defaults =============
 
-fn default_true() -> bool { true }
-fn default_port() -> u16 { 443 }
-fn default_tls_domain() -> String { "www.google.com".to_string() }
-fn default_mask_port() -> u16 { 443 }
-fn default_replay_check_len() -> usize { 65536 }
-fn default_replay_window_secs() -> u64 { 1800 }
-fn default_handshake_timeout() -> u64 { 15 }
-fn default_connect_timeout() -> u64 { 10 }
-fn default_keepalive() -> u64 { 60 }
-fn default_ack_timeout() -> u64 { 300 }
-fn default_listen_addr() -> String { "0.0.0.0".to_string() }
-fn default_fake_cert_len() -> usize { 2048 }
-fn default_weight() -> u16 { 1 }
+fn default_true() -> bool {
+    true
+}
+fn default_port() -> u16 {
+    443
+}
+fn default_tls_domain() -> String {
+    "www.google.com".to_string()
+}
+fn default_mask_port() -> u16 {
+    443
+}
+fn default_replay_check_len() -> usize {
+    65536
+}
+fn default_replay_window_secs() -> u64 {
+    1800
+}
+fn default_handshake_timeout() -> u64 {
+    15
+}
+fn default_connect_timeout() -> u64 {
+    10
+}
+fn default_keepalive() -> u64 {
+    60
+}
+fn default_ack_timeout() -> u64 {
+    300
+}
+fn default_listen_addr() -> String {
+    "0.0.0.0".to_string()
+}
+fn default_fake_cert_len() -> usize {
+    2048
+}
+fn default_weight() -> u16 {
+    1
+}
 fn default_metrics_whitelist() -> Vec<IpAddr> {
-    vec![
-        "127.0.0.1".parse().unwrap(),
-        "::1".parse().unwrap(),
-    ]
+    vec!["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()]
 }
 
 // ============= Log Level =============
@@ -96,7 +119,11 @@ pub struct ProxyModes {
 
 impl Default for ProxyModes {
     fn default() -> Self {
-        Self { classic: true, secure: true, tls: true }
+        Self {
+            classic: true,
+            secure: true,
+            tls: true,
+        }
     }
 }
 
@@ -104,19 +131,37 @@ impl Default for ProxyModes {
 pub struct GeneralConfig {
     #[serde(default)]
     pub modes: ProxyModes,
-    
+
     #[serde(default)]
     pub prefer_ipv6: bool,
-    
+
     #[serde(default = "default_true")]
     pub fast_mode: bool,
-    
+
     #[serde(default)]
     pub use_middle_proxy: bool,
 
     #[serde(default)]
     pub ad_tag: Option<String>,
-    
+
+    /// Path to proxy-secret binary file (auto-downloaded if absent).
+    /// Infrastructure secret from https://core.telegram.org/getProxySecret
+    #[serde(default)]
+    pub proxy_secret_path: Option<String>,
+
+    /// Public IP override for middle-proxy NAT environments.
+    /// When set, this IP is used in ME key derivation and RPC_PROXY_REQ "our_addr".
+    #[serde(default)]
+    pub middle_proxy_nat_ip: Option<IpAddr>,
+
+    /// Enable STUN-based NAT probing to discover public IP:port for ME KDF.
+    #[serde(default)]
+    pub middle_proxy_nat_probe: bool,
+
+    /// Optional STUN server address (host:port) for NAT probing.
+    #[serde(default)]
+    pub middle_proxy_nat_stun: Option<String>,
+
     #[serde(default)]
     pub log_level: LogLevel,
 }
@@ -129,6 +174,10 @@ impl Default for GeneralConfig {
             fast_mode: true,
             use_middle_proxy: false,
             ad_tag: None,
+            proxy_secret_path: None,
+            middle_proxy_nat_ip: None,
+            middle_proxy_nat_probe: false,
+            middle_proxy_nat_stun: None,
             log_level: LogLevel::Normal,
         }
     }
@@ -141,16 +190,16 @@ pub struct ServerConfig {
 
     #[serde(default = "default_listen_addr")]
     pub listen_addr_ipv4: String,
-    
+
     #[serde(default)]
     pub listen_addr_ipv6: Option<String>,
-    
+
     #[serde(default)]
     pub listen_unix_sock: Option<String>,
-    
+
     #[serde(default)]
     pub metrics_port: Option<u16>,
-    
+
     #[serde(default = "default_metrics_whitelist")]
     pub metrics_whitelist: Vec<IpAddr>,
 
@@ -176,13 +225,13 @@ impl Default for ServerConfig {
 pub struct TimeoutsConfig {
     #[serde(default = "default_handshake_timeout")]
     pub client_handshake: u64,
-    
+
     #[serde(default = "default_connect_timeout")]
     pub tg_connect: u64,
-    
+
     #[serde(default = "default_keepalive")]
     pub client_keepalive: u64,
-    
+
     #[serde(default = "default_ack_timeout")]
     pub client_ack: u64,
 }
@@ -202,13 +251,13 @@ impl Default for TimeoutsConfig {
 pub struct AntiCensorshipConfig {
     #[serde(default = "default_tls_domain")]
     pub tls_domain: String,
-    
+
     #[serde(default = "default_true")]
     pub mask: bool,
-    
+
     #[serde(default)]
     pub mask_host: Option<String>,
-    
+
     #[serde(default = "default_mask_port")]
     pub mask_port: u16,
 
@@ -239,19 +288,19 @@ pub struct AccessConfig {
 
     #[serde(default)]
     pub user_max_tcp_conns: HashMap<String, usize>,
-    
+
     #[serde(default)]
     pub user_expirations: HashMap<String, DateTime<Utc>>,
-    
+
     #[serde(default)]
     pub user_data_quota: HashMap<String, u64>,
 
     #[serde(default = "default_replay_check_len")]
     pub replay_check_len: usize,
-    
+
     #[serde(default = "default_replay_window_secs")]
     pub replay_window_secs: u64,
-    
+
     #[serde(default)]
     pub ignore_time_skew: bool,
 }
@@ -259,7 +308,10 @@ pub struct AccessConfig {
 impl Default for AccessConfig {
     fn default() -> Self {
         let mut users = HashMap::new();
-        users.insert("default".to_string(), "00000000000000000000000000000000".to_string());
+        users.insert(
+            "default".to_string(),
+            "00000000000000000000000000000000".to_string(),
+        );
         Self {
             users,
             user_max_tcp_conns: HashMap::new(),
@@ -454,12 +506,12 @@ pub struct ProxyConfig {
 
 impl ProxyConfig {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ProxyError::Config(e.to_string()))?;
-        
-        let mut config: ProxyConfig = toml::from_str(&content)
-            .map_err(|e| ProxyError::Config(e.to_string()))?;
-        
+        let content =
+            std::fs::read_to_string(path).map_err(|e| ProxyError::Config(e.to_string()))?;
+
+        let mut config: ProxyConfig =
+            toml::from_str(&content).map_err(|e| ProxyError::Config(e.to_string()))?;
+
         // Validate secrets
         for (user, secret) in &config.access.users {
             if !secret.chars().all(|c| c.is_ascii_hexdigit()) || secret.len() != 32 {
@@ -469,33 +521,34 @@ impl ProxyConfig {
                 });
             }
         }
-        
+
         // Validate tls_domain
         if config.censorship.tls_domain.is_empty() {
             return Err(ProxyError::Config("tls_domain cannot be empty".to_string()));
         }
-        
+
         // Validate mask_unix_sock
         if let Some(ref sock_path) = config.censorship.mask_unix_sock {
             if sock_path.is_empty() {
                 return Err(ProxyError::Config(
-                    "mask_unix_sock cannot be empty".to_string()
+                    "mask_unix_sock cannot be empty".to_string(),
                 ));
             }
             #[cfg(unix)]
             if sock_path.len() > 107 {
-                return Err(ProxyError::Config(
-                    format!("mask_unix_sock path too long: {} bytes (max 107)", sock_path.len())
-                ));
+                return Err(ProxyError::Config(format!(
+                    "mask_unix_sock path too long: {} bytes (max 107)",
+                    sock_path.len()
+                )));
             }
             #[cfg(not(unix))]
             return Err(ProxyError::Config(
-                "mask_unix_sock is only supported on Unix platforms".to_string()
+                "mask_unix_sock is only supported on Unix platforms".to_string(),
             ));
 
             if config.censorship.mask_host.is_some() {
                 return Err(ProxyError::Config(
-                    "mask_unix_sock and mask_host are mutually exclusive".to_string()
+                    "mask_unix_sock and mask_host are mutually exclusive".to_string(),
                 ));
             }
         }
@@ -504,11 +557,11 @@ impl ProxyConfig {
         if config.censorship.mask_host.is_none() && config.censorship.mask_unix_sock.is_none() {
             config.censorship.mask_host = Some(config.censorship.tls_domain.clone());
         }
-        
+
         // Random fake_cert_len
         use rand::Rng;
         config.censorship.fake_cert_len = rand::rng().gen_range(1024..4096);
-        
+
         // Migration: Populate listeners if empty
         if config.server.listeners.is_empty() {
             if let Ok(ipv4) = config.server.listen_addr_ipv4.parse::<IpAddr>() {
@@ -518,7 +571,7 @@ impl ProxyConfig {
                 });
             }
             if let Some(ipv6_str) = &config.server.listen_addr_ipv6 {
-                 if let Ok(ipv6) = ipv6_str.parse::<IpAddr>() {
+                if let Ok(ipv6) = ipv6_str.parse::<IpAddr>() {
                     config.server.listeners.push(ListenerConfig {
                         ip: ipv6,
                         announce_ip: None,
@@ -529,29 +582,30 @@ impl ProxyConfig {
 
         // Migration: Populate upstreams if empty (Default Direct)
         if config.upstreams.is_empty() {
-             config.upstreams.push(UpstreamConfig {
+            config.upstreams.push(UpstreamConfig {
                 upstream_type: UpstreamType::Direct { interface: None },
                 weight: 1,
                 enabled: true,
             });
         }
-        
+
         Ok(config)
     }
-    
+
     pub fn validate(&self) -> Result<()> {
         if self.access.users.is_empty() {
             return Err(ProxyError::Config("No users configured".to_string()));
         }
-        
+
         if !self.general.modes.classic && !self.general.modes.secure && !self.general.modes.tls {
             return Err(ProxyError::Config("No modes enabled".to_string()));
         }
-        
+
         if self.censorship.tls_domain.contains(' ') || self.censorship.tls_domain.contains('/') {
-            return Err(ProxyError::Config(
-                format!("Invalid tls_domain: '{}'. Must be a valid domain name", self.censorship.tls_domain)
-            ));
+            return Err(ProxyError::Config(format!(
+                "Invalid tls_domain: '{}'. Must be a valid domain name",
+                self.censorship.tls_domain
+            )));
         }
 
         Ok(())

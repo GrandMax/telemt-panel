@@ -1,0 +1,26 @@
+//! Middle Proxy RPC transport.
+
+mod codec;
+mod health;
+mod pool;
+mod pool_nat;
+mod reader;
+mod registry;
+mod send;
+mod secret;
+mod wire;
+
+use bytes::Bytes;
+
+pub use health::me_health_monitor;
+pub use pool::MePool;
+pub use registry::ConnRegistry;
+pub use secret::fetch_proxy_secret;
+pub use wire::proto_flags_for_tag;
+
+#[derive(Debug)]
+pub enum MeResponse {
+    Data { flags: u32, data: Bytes },
+    Ack(u32),
+    Close,
+}

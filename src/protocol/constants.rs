@@ -202,6 +202,17 @@ pub static RESERVED_NONCE_CONTINUES: &[[u8; 4]] = &[
 // ============= RPC Constants (for Middle Proxy) =============
 
 /// RPC Proxy Request
+
+/// RPC Flags (from Erlang mtp_rpc.erl)
+pub const RPC_FLAG_NOT_ENCRYPTED: u32 = 0x2;
+pub const RPC_FLAG_HAS_AD_TAG: u32    = 0x8;
+pub const RPC_FLAG_MAGIC: u32          = 0x1000;
+pub const RPC_FLAG_EXTMODE2: u32       = 0x20000;
+pub const RPC_FLAG_PAD: u32            = 0x8000000;
+pub const RPC_FLAG_INTERMEDIATE: u32   = 0x20000000;
+pub const RPC_FLAG_ABRIDGED: u32       = 0x40000000;
+pub const RPC_FLAG_QUICKACK: u32       = 0x80000000;
+
 pub const RPC_PROXY_REQ: [u8; 4] = [0xee, 0xf1, 0xce, 0x36];
 /// RPC Proxy Answer
 pub const RPC_PROXY_ANS: [u8; 4] = [0x0d, 0xda, 0x03, 0x44];
@@ -228,7 +239,56 @@ pub mod rpc_flags {
     pub const FLAG_QUICKACK: u32 = 0x80000000;
 }
 
-#[cfg(test)]
+
+    // ============= Middle-End Proxy Servers =============
+    pub const ME_PROXY_PORT: u16 = 8888;
+    
+    pub static TG_MIDDLE_PROXIES_FLAT_V4: LazyLock<Vec<(IpAddr, u16)>> = LazyLock::new(|| {
+        vec![
+            (IpAddr::V4(Ipv4Addr::new(149, 154, 175, 50)), 8888),
+            (IpAddr::V4(Ipv4Addr::new(149, 154, 161, 144)), 8888),
+            (IpAddr::V4(Ipv4Addr::new(149, 154, 175, 100)), 8888),
+            (IpAddr::V4(Ipv4Addr::new(91, 108, 4, 136)), 8888),
+            (IpAddr::V4(Ipv4Addr::new(91, 108, 56, 183)), 8888),
+        ]
+    });
+    
+    // ============= RPC Constants (u32 native endian) =============
+    // From mtproto-common.h + net-tcp-rpc-common.h + mtproto-proxy.c
+    
+    pub const RPC_NONCE_U32: u32           = 0x7acb87aa;
+    pub const RPC_HANDSHAKE_U32: u32       = 0x7682eef5;
+    pub const RPC_HANDSHAKE_ERROR_U32: u32 = 0x6a27beda;
+    pub const TL_PROXY_TAG_U32: u32        = 0xdb1e26ae;  // mtproto-proxy.c:121
+    
+    // mtproto-common.h
+    pub const RPC_PROXY_REQ_U32: u32       = 0x36cef1ee;
+    pub const RPC_PROXY_ANS_U32: u32       = 0x4403da0d;
+    pub const RPC_CLOSE_CONN_U32: u32      = 0x1fcf425d;
+    pub const RPC_CLOSE_EXT_U32: u32       = 0x5eb634a2;
+    pub const RPC_SIMPLE_ACK_U32: u32      = 0x3bac409b;
+    pub const RPC_PING_U32: u32            = 0x5730a2df;
+    pub const RPC_PONG_U32: u32            = 0x8430eaa7;
+    
+    pub const RPC_CRYPTO_NONE_U32: u32 = 0;
+    pub const RPC_CRYPTO_AES_U32: u32  = 1;
+    
+    pub mod proxy_flags {
+        pub const FLAG_HAS_AD_TAG: u32    = 1;
+        pub const FLAG_NOT_ENCRYPTED: u32 = 0x2;
+        pub const FLAG_HAS_AD_TAG2: u32   = 0x8;
+        pub const FLAG_MAGIC: u32         = 0x1000;
+        pub const FLAG_EXTMODE2: u32      = 0x20000;
+        pub const FLAG_PAD: u32           = 0x8000000;
+        pub const FLAG_INTERMEDIATE: u32  = 0x20000000;
+        pub const FLAG_ABRIDGED: u32      = 0x40000000;
+        pub const FLAG_QUICKACK: u32      = 0x80000000;
+    }
+    
+    pub const ME_CONNECT_TIMEOUT_SECS: u64 = 5;
+    pub const ME_HANDSHAKE_TIMEOUT_SECS: u64 = 10;
+    
+    #[cfg(test)]
 mod tests {
     use super::*;
     

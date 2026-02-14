@@ -1,11 +1,13 @@
 //! Proxy Defs
 
-pub mod handshake;
 pub mod client;
-pub mod relay;
+pub mod direct_relay;
+pub mod handshake;
 pub mod masking;
+pub mod middle_relay;
+pub mod relay;
 
-pub use handshake::*;
 pub use client::ClientHandler;
-pub use relay::*;
+pub use handshake::*;
 pub use masking::*;
+pub use relay::*;

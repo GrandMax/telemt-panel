@@ -3,26 +3,25 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
-use tracing::{debug, info, warn, error, trace};
+use tracing::{debug, warn};
 
 use crate::config::ProxyConfig;
-use crate::error::{ProxyError, Result, HandshakeResult};
+use crate::crypto::SecureRandom;
+use crate::error::{HandshakeResult, ProxyError, Result};
 use crate::protocol::constants::*;
 use crate::protocol::tls;
-use crate::stats::{Stats, ReplayChecker};
-use crate::transport::{configure_client_socket, UpstreamManager};
-use crate::stream::{CryptoReader, CryptoWriter, FakeTlsReader, FakeTlsWriter, BufferPool};
-use crate::crypto::{AesCtr, SecureRandom};
+use crate::stats::{ReplayChecker, Stats};
+use crate::stream::{BufferPool, CryptoReader, CryptoWriter};
+use crate::transport::middle_proxy::MePool;
+use crate::transport::{UpstreamManager, configure_client_socket};
 
-use crate::proxy::handshake::{
-    handle_tls_handshake, handle_mtproto_handshake, 
-    HandshakeSuccess, generate_tg_nonce, encrypt_tg_nonce,
-};
-use crate::proxy::relay::relay_bidirectional;
+use crate::proxy::direct_relay::handle_via_direct;
+use crate::proxy::handshake::{HandshakeSuccess, handle_mtproto_handshake, handle_tls_handshake};
 use crate::proxy::masking::handle_bad_client;
+use crate::proxy::middle_relay::handle_via_middle_proxy;
 
 pub struct ClientHandler;
 
@@ -35,6 +34,7 @@ pub struct RunningClientHandler {
     upstream_manager: Arc<UpstreamManager>,
     buffer_pool: Arc<BufferPool>,
     rng: Arc<SecureRandom>,
+    me_pool: Option<Arc<MePool>>,
 }
 
 impl ClientHandler {
@@ -47,10 +47,18 @@ impl ClientHandler {
         replay_checker: Arc<ReplayChecker>,
         buffer_pool: Arc<BufferPool>,
         rng: Arc<SecureRandom>,
+        me_pool: Option<Arc<MePool>>,
     ) -> RunningClientHandler {
         RunningClientHandler {
-            stream, peer, config, stats, replay_checker,
-            upstream_manager, buffer_pool, rng,
+            stream,
+            peer,
+            config,
+            stats,
+            replay_checker,
+            upstream_manager,
+            buffer_pool,
+            rng,
+            me_pool,
         }
     }
 }
@@ -58,10 +66,10 @@ impl ClientHandler {
 impl RunningClientHandler {
     pub async fn run(mut self) -> Result<()> {
         self.stats.increment_connects_all();
-        
+
         let peer = self.peer;
         debug!(peer = %peer, "New connection");
-        
+
         if let Err(e) = configure_client_socket(
             &self.stream,
             self.config.timeouts.client_keepalive,
@@ -69,12 +77,12 @@ impl RunningClientHandler {
         ) {
             debug!(peer = %peer, error = %e, "Failed to configure client socket");
         }
-        
+
         let handshake_timeout = Duration::from_secs(self.config.timeouts.client_handshake);
         let stats = self.stats.clone();
-        
+
         let result = timeout(handshake_timeout, self.do_handshake()).await;
-        
+
         match result {
             Ok(Ok(())) => {
                 debug!(peer = %peer, "Connection handled successfully");
@@ -91,30 +99,30 @@ impl RunningClientHandler {
             }
         }
     }
-    
+
     async fn do_handshake(mut self) -> Result<()> {
         let mut first_bytes = [0u8; 5];
         self.stream.read_exact(&mut first_bytes).await?;
-        
+
         let is_tls = tls::is_tls_handshake(&first_bytes[..3]);
         let peer = self.peer;
-        
+
         debug!(peer = %peer, is_tls = is_tls, "Handshake type detected");
-        
+
         if is_tls {
             self.handle_tls_client(first_bytes).await
         } else {
             self.handle_direct_client(first_bytes).await
         }
     }
-    
+
     async fn handle_tls_client(mut self, first_bytes: [u8; 5]) -> Result<()> {
         let peer = self.peer;
-        
+
         let tls_len = u16::from_be_bytes([first_bytes[3], first_bytes[4]]) as usize;
-        
+
         debug!(peer = %peer, tls_len = tls_len, "Reading TLS handshake");
-        
+
         if tls_len < 512 {
             debug!(peer = %peer, tls_len = tls_len, "TLS handshake too short");
             self.stats.increment_connects_bad();
@@ -122,22 +130,30 @@ impl RunningClientHandler {
             handle_bad_client(reader, writer, &first_bytes, &self.config).await;
             return Ok(());
         }
-        
+
         let mut handshake = vec![0u8; 5 + tls_len];
         handshake[..5].copy_from_slice(&first_bytes);
         self.stream.read_exact(&mut handshake[5..]).await?;
-        
+
         let config = self.config.clone();
         let replay_checker = self.replay_checker.clone();
         let stats = self.stats.clone();
         let buffer_pool = self.buffer_pool.clone();
-        
+
+        let local_addr = self.stream.local_addr().map_err(ProxyError::Io)?;
         let (read_half, write_half) = self.stream.into_split();
-        
+
         let (mut tls_reader, tls_writer, _tls_user) = match handle_tls_handshake(
-            &handshake, read_half, write_half, peer,
-            &config, &replay_checker, &self.rng,
-        ).await {
+            &handshake,
+            read_half,
+            write_half,
+            peer,
+            &config,
+            &replay_checker,
+            &self.rng,
+        )
+        .await
+        {
             HandshakeResult::Success(result) => result,
             HandshakeResult::BadClient { reader, writer } => {
                 stats.increment_connects_bad();
@@ -146,35 +162,54 @@ impl RunningClientHandler {
             }
             HandshakeResult::Error(e) => return Err(e),
         };
-        
+
         debug!(peer = %peer, "Reading MTProto handshake through TLS");
         let mtproto_data = tls_reader.read_exact(HANDSHAKE_LEN).await?;
-        let mtproto_handshake: [u8; HANDSHAKE_LEN] = mtproto_data[..].try_into()
+        let mtproto_handshake: [u8; HANDSHAKE_LEN] = mtproto_data[..]
+            .try_into()
             .map_err(|_| ProxyError::InvalidHandshake("Short MTProto handshake".into()))?;
-        
+
         let (crypto_reader, crypto_writer, success) = match handle_mtproto_handshake(
-            &mtproto_handshake, tls_reader, tls_writer, peer,
-            &config, &replay_checker, true,
-        ).await {
+            &mtproto_handshake,
+            tls_reader,
+            tls_writer,
+            peer,
+            &config,
+            &replay_checker,
+            true,
+        )
+        .await
+        {
             HandshakeResult::Success(result) => result,
-            HandshakeResult::BadClient { reader: _, writer: _ } => {
+            HandshakeResult::BadClient {
+                reader: _,
+                writer: _,
+            } => {
                 stats.increment_connects_bad();
                 debug!(peer = %peer, "Valid TLS but invalid MTProto handshake");
                 return Ok(());
             }
             HandshakeResult::Error(e) => return Err(e),
         };
-        
+
         Self::handle_authenticated_static(
-            crypto_reader, crypto_writer, success,
-            self.upstream_manager, self.stats, self.config,
-            buffer_pool, self.rng,
-        ).await
+            crypto_reader,
+            crypto_writer,
+            success,
+            self.upstream_manager,
+            self.stats,
+            self.config,
+            buffer_pool,
+            self.rng,
+            self.me_pool,
+            local_addr,
+        )
+        .await
     }
-    
+
     async fn handle_direct_client(mut self, first_bytes: [u8; 5]) -> Result<()> {
         let peer = self.peer;
-        
+
         if !self.config.general.modes.classic && !self.config.general.modes.secure {
             debug!(peer = %peer, "Non-TLS modes disabled");
             self.stats.increment_connects_bad();
@@ -182,22 +217,30 @@ impl RunningClientHandler {
             handle_bad_client(reader, writer, &first_bytes, &self.config).await;
             return Ok(());
         }
-        
+
         let mut handshake = [0u8; HANDSHAKE_LEN];
         handshake[..5].copy_from_slice(&first_bytes);
         self.stream.read_exact(&mut handshake[5..]).await?;
-        
+
         let config = self.config.clone();
         let replay_checker = self.replay_checker.clone();
         let stats = self.stats.clone();
         let buffer_pool = self.buffer_pool.clone();
-        
+
+        let local_addr = self.stream.local_addr().map_err(ProxyError::Io)?;
         let (read_half, write_half) = self.stream.into_split();
-        
+
         let (crypto_reader, crypto_writer, success) = match handle_mtproto_handshake(
-            &handshake, read_half, write_half, peer,
-            &config, &replay_checker, false,
-        ).await {
+            &handshake,
+            read_half,
+            write_half,
+            peer,
+            &config,
+            &replay_checker,
+            false,
+        )
+        .await
+        {
             HandshakeResult::Success(result) => result,
             HandshakeResult::BadClient { reader, writer } => {
                 stats.increment_connects_bad();
@@ -206,14 +249,26 @@ impl RunningClientHandler {
             }
             HandshakeResult::Error(e) => return Err(e),
         };
-        
+
         Self::handle_authenticated_static(
-            crypto_reader, crypto_writer, success,
-            self.upstream_manager, self.stats, self.config,
-            buffer_pool, self.rng,
-        ).await
+            crypto_reader,
+            crypto_writer,
+            success,
+            self.upstream_manager,
+            self.stats,
+            self.config,
+            buffer_pool,
+            self.rng,
+            self.me_pool,
+            local_addr,
+        )
+        .await
     }
-    
+
+    /// Main dispatch after successful handshake.
+    /// Two modes:
+    ///   - Direct: TCP relay to TG DC (existing behavior)  
+    ///   - Middle Proxy: RPC multiplex through ME pool (new — supports CDN DCs)
     async fn handle_authenticated_static<R, W>(
         client_reader: CryptoReader<R>,
         client_writer: CryptoWriter<W>,
@@ -223,180 +278,77 @@ impl RunningClientHandler {
         config: Arc<ProxyConfig>,
         buffer_pool: Arc<BufferPool>,
         rng: Arc<SecureRandom>,
+        me_pool: Option<Arc<MePool>>,
+        local_addr: SocketAddr,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
         let user = &success.user;
-        
+
         if let Err(e) = Self::check_user_limits_static(user, &config, &stats) {
             warn!(user = %user, error = %e, "User limit exceeded");
             return Err(e);
         }
-        
-        let dc_addr = Self::get_dc_addr_static(success.dc_idx, &config)?;
-        
-        info!(
-            user = %user,
-            peer = %success.peer,
-            dc = success.dc_idx,
-            dc_addr = %dc_addr,
-            proto = ?success.proto_tag,
-            "Connecting to Telegram"
-        );
-        
-        // Pass dc_idx for latency-based upstream selection
-        let tg_stream = upstream_manager.connect(dc_addr, Some(success.dc_idx)).await?;
-        
-        debug!(peer = %success.peer, dc_addr = %dc_addr, "Connected, performing TG handshake");
-        
-        let (tg_reader, tg_writer) = Self::do_tg_handshake_static(
-            tg_stream, &success, &config, rng.as_ref(),
-        ).await?;
-        
-        debug!(peer = %success.peer, "TG handshake complete, starting relay");
-        
-        stats.increment_user_connects(user);
-        stats.increment_user_curr_connects(user);
-        
-        let relay_result = relay_bidirectional(
-            client_reader, client_writer,
-            tg_reader, tg_writer,
-            user, Arc::clone(&stats), buffer_pool,
-        ).await;
-        
-        stats.decrement_user_curr_connects(user);
-        
-        match &relay_result {
-            Ok(()) => debug!(user = %user, "Relay completed"),
-            Err(e) => debug!(user = %user, error = %e, "Relay ended with error"),
+
+        // Decide: middle proxy or direct
+        if config.general.use_middle_proxy {
+            if let Some(ref pool) = me_pool {
+                return handle_via_middle_proxy(
+                    client_reader,
+                    client_writer,
+                    success,
+                    pool.clone(),
+                    stats,
+                    config,
+                    buffer_pool,
+                    local_addr,
+                )
+                .await;
+            }
+            warn!("use_middle_proxy=true but MePool not initialized, falling back to direct");
         }
-        
-        relay_result
+
+        // Direct mode (original behavior)
+        handle_via_direct(
+            client_reader,
+            client_writer,
+            success,
+            upstream_manager,
+            stats,
+            config,
+            buffer_pool,
+            rng,
+        )
+        .await
     }
-    
+
     fn check_user_limits_static(user: &str, config: &ProxyConfig, stats: &Stats) -> Result<()> {
         if let Some(expiration) = config.access.user_expirations.get(user) {
             if chrono::Utc::now() > *expiration {
-                return Err(ProxyError::UserExpired { user: user.to_string() });
+                return Err(ProxyError::UserExpired {
+                    user: user.to_string(),
+                });
             }
         }
-        
+
         if let Some(limit) = config.access.user_max_tcp_conns.get(user) {
             if stats.get_user_curr_connects(user) >= *limit as u64 {
-                return Err(ProxyError::ConnectionLimitExceeded { user: user.to_string() });
+                return Err(ProxyError::ConnectionLimitExceeded {
+                    user: user.to_string(),
+                });
             }
         }
-        
+
         if let Some(quota) = config.access.user_data_quota.get(user) {
             if stats.get_user_total_octets(user) >= *quota {
-                return Err(ProxyError::DataQuotaExceeded { user: user.to_string() });
+                return Err(ProxyError::DataQuotaExceeded {
+                    user: user.to_string(),
+                });
             }
         }
-        
+
         Ok(())
-    }
-    
-    /// Resolve DC index to a target address.
-    ///
-    /// Matches the C implementation's behavior exactly:
-    ///
-    /// 1. Look up DC in known clusters (standard DCs ±1..±5)
-    /// 2. If not found and `force=1` → fall back to `default_cluster`
-    ///
-    /// In the C code:
-    /// - `proxy-multi.conf` is downloaded from Telegram, contains only DC ±1..±5
-    /// - `default 2;` directive sets the default cluster
-    /// - `mf_cluster_lookup(CurConf, target_dc, 1)` returns default_cluster
-    ///   for any unknown DC (like CDN DC 203)
-    ///
-    /// So DC 203, DC 101, DC -300, etc. all route to the default DC (2).
-    /// There is NO modular arithmetic in the C implementation.
-    fn get_dc_addr_static(dc_idx: i16, config: &ProxyConfig) -> Result<SocketAddr> {
-        let datacenters = if config.general.prefer_ipv6 {
-            &*TG_DATACENTERS_V6
-        } else {
-            &*TG_DATACENTERS_V4
-        };
-    
-        let num_dcs = datacenters.len(); // 5
-    
-        // === Step 1: Check dc_overrides (like C's `proxy_for <dc> <ip>:<port>`) ===
-        let dc_key = dc_idx.to_string();
-        if let Some(addr_str) = config.dc_overrides.get(&dc_key) {
-            match addr_str.parse::<SocketAddr>() {
-                Ok(addr) => {
-                    debug!(dc_idx = dc_idx, addr = %addr, "Using DC override from config");
-                    return Ok(addr);
-                }
-                Err(_) => {
-                    warn!(dc_idx = dc_idx, addr_str = %addr_str,
-                        "Invalid DC override address in config, ignoring");
-                }
-            }
-        }
-    
-        // === Step 2: Standard DCs ±1..±5 — direct lookup ===
-        let abs_dc = dc_idx.unsigned_abs() as usize;
-        if abs_dc >= 1 && abs_dc <= num_dcs {
-            return Ok(SocketAddr::new(datacenters[abs_dc - 1], TG_DATACENTER_PORT));
-        }
-    
-        // === Step 3: Unknown DC — fall back to default_cluster ===
-        // Exactly like C's `mf_cluster_lookup(CurConf, target_dc, force=1)`
-        // which returns `MC->default_cluster` when the DC is not found.
-        // Telegram's proxy-multi.conf uses `default 2;`
-        let default_dc = config.default_dc.unwrap_or(2) as usize;
-        let fallback_idx = if default_dc >= 1 && default_dc <= num_dcs {
-            default_dc - 1
-        } else {
-            1 // DC 2 (index 1) — matches Telegram's `default 2;`
-        };
-    
-        info!(
-            original_dc = dc_idx,
-            fallback_dc = (fallback_idx + 1) as u16,
-            fallback_addr = %datacenters[fallback_idx],
-            "Special DC ---> default_cluster"
-        );
-    
-        Ok(SocketAddr::new(datacenters[fallback_idx], TG_DATACENTER_PORT))
-    }
-    
-    async fn do_tg_handshake_static(
-        mut stream: TcpStream,
-        success: &HandshakeSuccess,
-        config: &ProxyConfig,
-        rng: &SecureRandom,
-    ) -> Result<(CryptoReader<tokio::net::tcp::OwnedReadHalf>, CryptoWriter<tokio::net::tcp::OwnedWriteHalf>)> {
-        let (nonce, tg_enc_key, tg_enc_iv, tg_dec_key, tg_dec_iv) = generate_tg_nonce(
-            success.proto_tag,
-            &success.dec_key,
-            success.dec_iv,
-            rng,
-            config.general.fast_mode,
-        );
-        
-        let encrypted_nonce = encrypt_tg_nonce(&nonce);
-        
-        debug!(
-            peer = %success.peer,
-            nonce_head = %hex::encode(&nonce[..16]),
-            "Sending nonce to Telegram"
-        );
-        
-        stream.write_all(&encrypted_nonce).await?;
-        stream.flush().await?;
-        
-        let (read_half, write_half) = stream.into_split();
-        
-        let decryptor = AesCtr::new(&tg_dec_key, tg_dec_iv);
-        let encryptor = AesCtr::new(&tg_enc_key, tg_enc_iv);
-        
-        Ok((
-            CryptoReader::new(read_half, decryptor),
-            CryptoWriter::new(write_half, encryptor),
-        ))
     }
 }

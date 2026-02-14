@@ -44,7 +44,7 @@ client_ack = 300
 
 # === Anti-Censorship & Masking ===
 [censorship]
-tls_domain = "google.ru"
+tls_domain = "petrovich.ru"
 mask = true
 mask_port = 443
 # mask_host = "petrovich.ru" # Defaults to tls_domain if not set
@@ -75,6 +75,6 @@ weight = 10
 
 # [[upstreams]]
 # type = "socks5"
-# address = "127.0.0.1:9050"
+# address = "127.0.0.1:1080"
 # enabled = false
 # weight = 1

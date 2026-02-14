@@ -10,4 +10,5 @@ pub use pool::ConnectionPool;
 pub use proxy_protocol::{ProxyProtocolInfo, parse_proxy_protocol};
 pub use socket::*;
 pub use socks::*;
-pub use upstream::{UpstreamManager, StartupPingResult, DcPingResult};
+pub use upstream::{DcPingResult, StartupPingResult, UpstreamManager};
+pub mod middle_proxy;
