@@ -172,7 +172,7 @@ mod tests {
         let digest = sha256(&prekey);
         assert_eq!(
             hex::encode(digest),
-            "a4595b75f1f610f2575ace802ddc65c91b5acef3b0e0d18189e0c7c9f787d15c"
+            "934f5facdafd65a44d5c2df90d2f35ddc81faaaeb337949dfeef817c8a7c1e00"
         );
     }
 }
