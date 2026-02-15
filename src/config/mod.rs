@@ -164,6 +164,10 @@ pub struct GeneralConfig {
 
     #[serde(default)]
     pub log_level: LogLevel,
+
+    /// Disable colored output in logs (useful for files/systemd)
+    #[serde(default)]
+    pub disable_colors: bool,
 }
 
 impl Default for GeneralConfig {
@@ -179,6 +183,7 @@ impl Default for GeneralConfig {
             middle_proxy_nat_probe: false,
             middle_proxy_nat_stun: None,
             log_level: LogLevel::Normal,
+            disable_colors: false,
         }
     }
 }

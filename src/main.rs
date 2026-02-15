@@ -133,13 +133,24 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     };
 
     let (filter_layer, filter_handle) = reload::Layer::new(EnvFilter::new("info"));
+    
+    // Configure color output based on config
+    let fmt_layer = if config.general.disable_colors {
+        fmt::Layer::default().with_ansi(false)
+    } else {
+        fmt::Layer::default().with_ansi(true)
+    };
+    
     tracing_subscriber::registry()
         .with(filter_layer)
-        .with(fmt::Layer::default())
+        .with(fmt_layer)
         .init();
 
     info!("Telemt MTProxy v{}", env!("CARGO_PKG_VERSION"));
     info!("Log level: {}", effective_log_level);
+    if config.general.disable_colors {
+        info!("Colors: disabled");
+    }
     info!(
         "Modes: classic={} secure={} tls={}",
         config.general.modes.classic, config.general.modes.secure, config.general.modes.tls
