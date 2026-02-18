@@ -52,7 +52,9 @@ If you have expertise in asynchronous network applications, traffic analysis, re
 # Features
 💥 The configuration structure has changed since version 1.1.0.0. change it in your environment!
 
-⚓ Our implementation of **TLS-fronting** is one of the most deeply debugged, focused, advanced and *almost* **"behaviorally consistent to real"**:  we are confident we have it right - [see evidence on our validation and traces](#recognizability-for-dpi-and-crawler) 
+⚓ Our implementation of **TLS-fronting** is one of the most deeply debugged, focused, advanced and *almost* **"behaviorally consistent to real"**:  we are confident we have it right - [see evidence on our validation and traces](#recognizability-for-dpi-and-crawler)
+
+⚓ Our ***Middle-End Pool*** is fastest by design in standard scenarios, compared to other implementations of connecting to the Middle-End Proxy
 
 # GOTO
 - [Features](#features)
