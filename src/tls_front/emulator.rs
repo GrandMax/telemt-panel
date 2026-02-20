@@ -44,8 +44,12 @@ pub fn build_emulated_server_hello(
     message.extend_from_slice(&[0u8; 32]); // random placeholder
     message.push(session_id.len() as u8);
     message.extend_from_slice(session_id);
-    // Always use TLS_AES_128_GCM_SHA256 (0x1301) to match Telegram client's offer set.
-    message.extend_from_slice(&[0x13, 0x01]);
+    let cipher = if cached.server_hello_template.cipher_suite == [0, 0] {
+        [0x13, 0x01]
+    } else {
+        cached.server_hello_template.cipher_suite
+    };
+    message.extend_from_slice(&cipher);
     message.push(cached.server_hello_template.compression);
     message.extend_from_slice(&extensions_len.to_be_bytes());
     message.extend_from_slice(&extensions);
@@ -67,11 +71,11 @@ pub fn build_emulated_server_hello(
     ];
 
     // --- ApplicationData (fake encrypted records) ---
-    let sizes = if cached.app_data_records_sizes.is_empty() {
-        vec![cached.total_app_data_len.max(1024)]
-    } else {
-        cached.app_data_records_sizes.clone()
-    };
+    // Use the same number and sizes of ApplicationData records as the cached server.
+    let mut sizes = cached.app_data_records_sizes.clone();
+    if sizes.is_empty() {
+        sizes.push(cached.total_app_data_len.max(1024));
+    }
 
     let mut app_data = Vec::new();
     for size in sizes {
