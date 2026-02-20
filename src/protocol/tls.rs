@@ -899,7 +899,8 @@ mod tests {
     #[test]
     fn test_extract_alpn_single() {
         let mut alpn_data = Vec::new();
-        alpn_data.extend_from_slice(&2u16.to_be_bytes()); // list len
+        // list length = 3 (1 length byte + "h2")
+        alpn_data.extend_from_slice(&3u16.to_be_bytes());
         alpn_data.push(2);
         alpn_data.extend_from_slice(b"h2");
         let ch = build_client_hello_with_exts(vec![(0x0010, alpn_data)], "alpn.test");
@@ -910,10 +911,11 @@ mod tests {
     #[test]
     fn test_extract_alpn_multiple() {
         let mut alpn_data = Vec::new();
-        alpn_data.extend_from_slice(&9u16.to_be_bytes()); // list len
+        // list length = 11 (sum of per-proto lengths including length bytes)
+        alpn_data.extend_from_slice(&11u16.to_be_bytes());
         alpn_data.push(2);
         alpn_data.extend_from_slice(b"h2");
-        alpn_data.push(3);
+        alpn_data.push(4);
         alpn_data.extend_from_slice(b"spdy");
         alpn_data.push(2);
         alpn_data.extend_from_slice(b"h3");
