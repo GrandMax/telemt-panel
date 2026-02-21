@@ -924,8 +924,12 @@ mod tests {
         alpn_data.push(2);
         alpn_data.extend_from_slice(b"h2");
         let ch = build_client_hello_with_exts(vec![(0x0010, alpn_data)], "alpn.test");
-        let alpn = extract_alpn_from_client_hello(&ch).unwrap();
-        assert_eq!(alpn, vec!["h2"]);
+        let alpn = extract_alpn_from_client_hello(&ch);
+        let alpn_str: Vec<String> = alpn
+            .iter()
+            .map(|p| std::str::from_utf8(p).unwrap().to_string())
+            .collect();
+        assert_eq!(alpn_str, vec!["h2"]);
     }
 
     #[test]
@@ -940,7 +944,11 @@ mod tests {
         alpn_data.push(2);
         alpn_data.extend_from_slice(b"h3");
         let ch = build_client_hello_with_exts(vec![(0x0010, alpn_data)], "alpn.test");
-        let alpn = extract_alpn_from_client_hello(&ch).unwrap();
-        assert_eq!(alpn, vec!["h2", "spdy", "h3"]);
+        let alpn = extract_alpn_from_client_hello(&ch);
+        let alpn_str: Vec<String> = alpn
+            .iter()
+            .map(|p| std::str::from_utf8(p).unwrap().to_string())
+            .collect();
+        assert_eq!(alpn_str, vec!["h2", "spdy", "h3"]);
     }
 }
