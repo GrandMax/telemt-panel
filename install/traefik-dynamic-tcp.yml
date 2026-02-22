@@ -3,15 +3,15 @@
 
 tcp:
   routers:
-    mtproxy:
+    mtpannel:
       rule: "HostSNI(`SNI_DOMAIN_PLACEHOLDER`)"
       entryPoints:
         - websecure
-      service: mtproxy
+      service: mtpannel
       tls:
         passthrough: true
   services:
-    mtproxy:
+    mtpannel:
       loadBalancer:
         servers:
           - address: "telemt:TELEMT_PORT_PLACEHOLDER"

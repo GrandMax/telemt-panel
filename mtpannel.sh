@@ -11,7 +11,7 @@ fi
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-INSTALL_DIR="${INSTALL_DIR:-$(pwd)/mtproxy-data}"
+INSTALL_DIR="${INSTALL_DIR:-$(pwd)/mtpannel-data}"
 FAKE_DOMAIN="${FAKE_DOMAIN:-pikabu.ru}"
 TELEMT_INTERNAL_PORT="${TELEMT_INTERNAL_PORT:-1234}"
 LISTEN_PORT="${LISTEN_PORT:-443}"
@@ -211,6 +211,42 @@ is_port_in_use() {
 	return 1
 }
 
+# Returns 0 if dir looks like repo root for build (has install/ and Dockerfile).
+is_build_repo_root() {
+	local dir="${1:-}"
+	[[ -f "${dir}/install/docker-compose.yml" ]] && \
+	[[ -f "${dir}/install/telemt.toml.example" ]] && \
+	[[ -f "${dir}/install/traefik-dynamic-tcp.yml" ]] && \
+	[[ -f "${dir}/Dockerfile" ]]
+}
+
+# Ensure git is available; try to install on common distros. Exit 1 if not available.
+ensure_git() {
+	if command -v git &>/dev/null; then
+		return 0
+	fi
+	show_info "Для сборки из исходников нужен git. Попытка установки..."
+	if command -v apt-get &>/dev/null; then
+		if apt-get update &>/dev/null && apt-get install -y git &>/dev/null; then
+			show_success "git установлен."
+			return 0
+		fi
+	fi
+	if command -v dnf &>/dev/null; then
+		if dnf install -y git &>/dev/null; then
+			show_success "git установлен."
+			return 0
+		fi
+	fi
+	if command -v yum &>/dev/null; then
+		if yum install -y git &>/dev/null; then
+			show_success "git установлен."
+			return 0
+		fi
+	fi
+	err "Установите git вручную для варианта «Собрать из исходников» (apt install git / dnf install git / yum install git)."
+}
+
 generate_secret() {
 	openssl rand -hex 16
 }
@@ -277,7 +313,7 @@ run_compose() {
 }
 
 print_link() {
-	local SECRET TLS_DOMAIN DOMAIN_HEX LONG_SECRET SERVER_IP LINK port
+	local SECRET TLS_DOMAIN DOMAIN_HEX LONG_SECRET SERVER_IP4 SERVER_IP6 port raw url
 	SECRET=$(cat "${INSTALL_DIR}/.secret" 2>/dev/null | tr -d '\n\r')
 	if [[ -z "$SECRET" ]]; then err "Секрет не найден в ${INSTALL_DIR}/.secret"; fi
 
@@ -296,22 +332,38 @@ print_link() {
 	[[ -f "${INSTALL_DIR}/.env" ]] && source "${INSTALL_DIR}/.env" 2>/dev/null || true
 	if [[ -n "$LISTEN_PORT" ]]; then port="$LISTEN_PORT"; fi
 
-	SERVER_IP=""
+	# Сначала IPv4, затем IPv6 (две ссылки при наличии обоих)
+	SERVER_IP4=""
 	for url in https://ifconfig.me/ip https://icanhazip.com https://api.ipify.org https://checkip.amazonaws.com; do
-		raw=$(curl -s --connect-timeout 3 "$url" 2>/dev/null | tr -d '\n\r')
-		if [[ -n "$raw" ]] && [[ ! "$raw" =~ [[:space:]] ]] && [[ ! "$raw" =~ (error|timeout|upstream|reset|refused) ]] && [[ "$raw" =~ ^([0-9.]+|[0-9a-fA-F:]+)$ ]]; then
-			SERVER_IP="$raw"
+		raw=$(curl -4 -s --connect-timeout 3 "$url" 2>/dev/null | tr -d '\n\r')
+		if [[ -n "$raw" ]] && [[ ! "$raw" =~ [[:space:]] ]] && [[ "$raw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+			SERVER_IP4="$raw"
 			break
 		fi
 	done
-	if [[ -z "$SERVER_IP" ]]; then
-		SERVER_IP="YOUR_SERVER_IP"
+	SERVER_IP6=""
+	for url in https://ifconfig.me/ip https://icanhazip.com https://api.ipify.org https://api64.ipify.org; do
+		raw=$(curl -6 -s --connect-timeout 3 "$url" 2>/dev/null | tr -d '\n\r')
+		if [[ -n "$raw" ]] && [[ ! "$raw" =~ [[:space:]] ]] && [[ "$raw" =~ : ]] && [[ "$raw" =~ ^[0-9a-fA-F:.]+$ ]]; then
+			SERVER_IP6="$raw"
+			break
+		fi
+	done
+	if [[ -z "$SERVER_IP4" ]] && [[ -z "$SERVER_IP6" ]]; then
+		SERVER_IP4="YOUR_SERVER_IP"
 		show_warning "Не удалось определить внешний IP. Подставьте IP в ссылку вручную."
 	fi
-	LINK="tg://proxy?server=${SERVER_IP}&port=${port}&secret=${LONG_SECRET}"
 
 	draw_section_header "Ссылка для Telegram (Fake TLS)" "$BOX_WIDTH"
-	printf '  %s%s%s\n' "${GREEN}" "$LINK" "${NC}"
+	if [[ -n "$SERVER_IP4" ]] && [[ "$SERVER_IP4" != "YOUR_SERVER_IP" ]]; then
+		printf '  %stg://proxy?server=%s&port=%s&secret=%s%s\n' "${GREEN}" "$SERVER_IP4" "$port" "$LONG_SECRET" "${NC}"
+	fi
+	if [[ -n "$SERVER_IP6" ]]; then
+		printf '  %stg://proxy?server=%s&port=%s&secret=%s%s\n' "${GREEN}" "$SERVER_IP6" "$port" "$LONG_SECRET" "${NC}"
+	fi
+	if [[ "$SERVER_IP4" == "YOUR_SERVER_IP" ]]; then
+		printf '  %stg://proxy?server=%s&port=%s&secret=%s%s\n' "${GREEN}" "$SERVER_IP4" "$port" "$LONG_SECRET" "${NC}"
+	fi
 	echo ""
 	draw_info_row "Сохраните ссылку" "не публикуйте её публично"
 	draw_info_row "Данные установки" "${INSTALL_DIR}"
@@ -327,7 +379,7 @@ get_install_dir() {
 }
 
 prompt_install_dir_existing() {
-	local default="${1:-$(pwd)/mtproxy-data}"
+	local default="${1:-$(pwd)/mtpannel-data}"
 	default="$(resolve_install_dir "$default")"
 	if [[ -t 0 ]]; then
 		while true; do
@@ -437,6 +489,22 @@ cmd_install() {
 		TELEMT_IMAGE_SOURCE="${TELEMT_IMAGE_SOURCE:-prebuilt}"
 	fi
 
+	if [[ "$TELEMT_IMAGE_SOURCE" == "build" ]]; then
+		if ! is_build_repo_root "$REPO_ROOT"; then
+			ensure_git
+			mkdir -p "${INSTALL_DIR}"
+			CLONE_DIR="${INSTALL_DIR}/.telemt-source"
+			if [[ -d "${CLONE_DIR}/.git" ]]; then
+				show_info "Обновляю клон репозитория в ${CLONE_DIR} ..."
+				(cd "${CLONE_DIR}" && git pull --depth 1 2>/dev/null) || true
+			else
+				show_info "Клонирую GrandMax/telemt-pannel в ${CLONE_DIR} ..."
+				git clone --depth 1 https://github.com/GrandMax/telemt-pannel.git "${CLONE_DIR}"
+			fi
+			REPO_ROOT="${CLONE_DIR}"
+		fi
+	fi
+
 	copy_and_configure
 	run_compose
 	print_link
@@ -462,6 +530,14 @@ cmd_update() {
 	if [[ "$img_source" == "prebuilt" ]]; then
 		(cd "$dir" && docker compose pull telemt && docker compose up -d)
 	else
+		if [[ -f "${dir}/.env" ]]; then
+			repo_root=""
+			repo_root=$(grep -E '^REPO_ROOT=' "${dir}/.env" 2>/dev/null | cut -d= -f2-)
+			if [[ -n "$repo_root" ]] && [[ -d "$repo_root/.git" ]] && [[ "$repo_root" == "${dir}"* ]]; then
+				show_info "Обновляю исходники в ${repo_root} ..."
+				(cd "$repo_root" && git pull --depth 1 2>/dev/null) || true
+			fi
+		fi
 		(cd "$dir" && docker compose build --no-cache telemt && docker compose up -d)
 	fi
 	show_success "Готово."
