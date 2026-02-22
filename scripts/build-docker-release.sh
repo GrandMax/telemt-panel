@@ -29,7 +29,7 @@ if [[ ! -f Dockerfile ]] || [[ ! -f Cargo.toml ]]; then
 	exit 1
 fi
 
-VERSION=$(grep -E '^version\s*=' Cargo.toml | head -n1 | sed -E 's/.*=\s*"([^"]+)".*/\1/')
+VERSION=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' Cargo.toml | head -n1)
 if [[ -z "$VERSION" ]]; then
 	VERSION="unknown"
 fi

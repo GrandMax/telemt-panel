@@ -79,6 +79,8 @@ INSTALL_DIR=/opt/mtproxy FAKE_DOMAIN=sberbank.ru ./install.sh
    Скрипт соберёт образ из `Dockerfile`, протегирует его как `grandmax/telemt-pannel:latest` и `grandmax/telemt-pannel:<версия>` (версия из `Cargo.toml`) и отправит образ в реестр.
 3. Только локальная сборка без отправки: `./scripts/build-docker-release.sh --no-push`.
 
+**Сборка в GitHub Actions:** при пуше в `main` и при создании релиза workflow «Docker build and push» собирает образ и пушит его в Docker Hub. В настройках репозитория (Settings → Secrets and variables → Actions) добавьте секреты: `DOCKERHUB_USERNAME` (логин Docker Hub) и `DOCKERHUB_TOKEN` (Access Token из [Docker Hub → Security](https://hub.docker.com/settings/security)).
+
 ## Полезные команды
 
 - Логи: `cd <каталог_установки> && docker compose logs -f`
