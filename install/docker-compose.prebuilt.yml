@@ -1,0 +1,53 @@
+# Template: LISTEN_PORT is set in .env. Telemt image is pulled from registry (no build).
+
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: mtproxy-traefik
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=false"
+      - "--entrypoints.websecure.address=:443"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+    ports:
+      - "${LISTEN_PORT:-443}:443"
+    volumes:
+      - ./traefik/static:/etc/traefik/static:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - mtproxy
+
+  telemt:
+    image: grandmax/telemt-pannel:latest
+    container_name: mtproxy-telemt
+    restart: unless-stopped
+    environment:
+      RUST_LOG: "info"
+    volumes:
+      - ./telemt.toml:/app/config.toml:ro
+    networks:
+      - mtproxy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  mtproxy:
+    driver: bridge

@@ -10,6 +10,8 @@ INSTALL_DIR="${INSTALL_DIR:-$(pwd)/mtproxy-data}"
 FAKE_DOMAIN="${FAKE_DOMAIN:-1c.ru}"
 TELEMT_INTERNAL_PORT="${TELEMT_INTERNAL_PORT:-1234}"
 LISTEN_PORT="${LISTEN_PORT:-443}"
+TELEMT_PREBUILT_IMAGE="${TELEMT_PREBUILT_IMAGE:-grandmax/telemt-pannel:latest}"
+TELEMT_IMAGE_SOURCE="${TELEMT_IMAGE_SOURCE:-build}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -107,6 +109,13 @@ prompt_port() {
 				read -r input
 				[[ -z "$input" ]] && input=$suggested
 			else
+				# Non-interactive: respect explicit LISTEN_PORT from env
+				if [[ "${LISTEN_PORT:-443}" != "443" ]]; then
+					if is_port_in_use "$LISTEN_PORT"; then
+						warn "Порт ${LISTEN_PORT} занят. Используется как указано."
+					fi
+					return
+				fi
 				LISTEN_PORT=$suggested
 				return
 			fi
@@ -174,6 +183,27 @@ confirm_install() {
 	exit 0
 }
 
+# Set TELEMT_IMAGE_SOURCE=build or prebuilt. Interactive: prompt; non-interactive: use env (default build).
+prompt_image_source() {
+	if [[ -t 0 ]]; then
+		echo ""
+		echo "Образ telemt:"
+		echo "  1) Собрать из исходников (локально)"
+		echo "  2) Скачать готовый образ (${TELEMT_PREBUILT_IMAGE})"
+		echo -n "Выбор [1]: "
+		read -r input
+		input="${input%% *}"
+		if [[ "$input" == "2" ]]; then
+			TELEMT_IMAGE_SOURCE=prebuilt
+		else
+			TELEMT_IMAGE_SOURCE=build
+		fi
+	else
+		# Non-interactive: already set from env, default build
+		TELEMT_IMAGE_SOURCE="${TELEMT_IMAGE_SOURCE:-build}"
+	fi
+}
+
 generate_secret() {
 	openssl rand -hex 16
 }
@@ -186,7 +216,15 @@ copy_and_configure() {
 		err "Шаблоны не найдены в ${REPO_ROOT}/install/. Запускайте скрипт из корня репозитория telemt."
 	fi
 
-	cp "${REPO_ROOT}/install/docker-compose.yml" "${INSTALL_DIR}/docker-compose.yml"
+	if [[ "$TELEMT_IMAGE_SOURCE" == "prebuilt" ]]; then
+		if [[ ! -f "${REPO_ROOT}/install/docker-compose.prebuilt.yml" ]]; then
+			err "Шаблон docker-compose.prebuilt.yml не найден в ${REPO_ROOT}/install/."
+		fi
+		sed -e "s|image: grandmax/telemt-pannel:latest|image: ${TELEMT_PREBUILT_IMAGE}|g" \
+			"${REPO_ROOT}/install/docker-compose.prebuilt.yml" > "${INSTALL_DIR}/docker-compose.yml"
+	else
+		cp "${REPO_ROOT}/install/docker-compose.yml" "${INSTALL_DIR}/docker-compose.yml"
+	fi
 	cp "${REPO_ROOT}/install/telemt.toml.example" "${INSTALL_DIR}/telemt.toml.example"
 
 	SECRET=$(generate_secret)
@@ -204,18 +242,25 @@ copy_and_configure() {
 
 	printf '%s' "$SECRET" > "${INSTALL_DIR}/.secret"
 
-	# .env for docker compose (REPO_ROOT, LISTEN_PORT)
+	# .env for docker compose (REPO_ROOT, LISTEN_PORT, TELEMT_IMAGE_SOURCE)
 	{
 		echo "REPO_ROOT=${REPO_ROOT}"
 		echo "LISTEN_PORT=${LISTEN_PORT}"
+		echo "TELEMT_IMAGE_SOURCE=${TELEMT_IMAGE_SOURCE}"
 	} > "${INSTALL_DIR}/.env"
 }
 
 run_compose() {
 	cd "${INSTALL_DIR}"
-	info "Сборка образа telemt и запуск контейнеров..."
-	docker compose build --no-cache telemt 2>/dev/null || docker compose build telemt
-	docker compose up -d
+	if [[ "${TELEMT_IMAGE_SOURCE}" == "prebuilt" ]]; then
+		info "Загрузка образа telemt и запуск контейнеров..."
+		docker compose pull telemt
+		docker compose up -d
+	else
+		info "Сборка образа telemt и запуск контейнеров..."
+		docker compose build --no-cache telemt 2>/dev/null || docker compose build telemt
+		docker compose up -d
+	fi
 	info "Контейнеры запущены."
 }
 
@@ -277,6 +322,7 @@ cmd_install() {
 	prompt_port
 	prompt_fake_domain
 	confirm_install
+	prompt_image_source
 	copy_and_configure
 	run_compose
 	print_link
@@ -292,8 +338,18 @@ cmd_update() {
 	if [[ ! -d "$dir" ]] || [[ ! -f "${dir}/docker-compose.yml" ]] || [[ ! -f "${dir}/telemt.toml" ]]; then
 		err "Не похоже на установку telemt (нет docker-compose.yml или telemt.toml): ${dir}"
 	fi
+	local img_source=build
+	if [[ -f "${dir}/.env" ]]; then
+		local val
+		val=$(grep -E '^TELEMT_IMAGE_SOURCE=' "${dir}/.env" 2>/dev/null | cut -d= -f2-)
+		[[ -n "$val" ]] && img_source="$val"
+	fi
 	info "Обновление образа telemt в ${dir} ..."
-	(cd "$dir" && docker compose build --no-cache telemt && docker compose up -d)
+	if [[ "$img_source" == "prebuilt" ]]; then
+		(cd "$dir" && docker compose pull telemt && docker compose up -d)
+	else
+		(cd "$dir" && docker compose build --no-cache telemt && docker compose up -d)
+	fi
 	info "Готово."
 	INSTALL_DIR="$dir"
 	print_link
@@ -331,7 +387,8 @@ prompt_install_dir_existing() {
 	echo "$default"
 }
 
-# Show main menu, return 1-5 (5=exit). Only call when [[ -t 0 ]].
+# Show main menu; set MENU_CHOICE=1..5 (5=exit) and return 0. Only call when [[ -t 0 ]].
+# Uses MENU_CHOICE instead of return code so that set -e does not exit when user selects 1.
 show_menu() {
 	while true; do
 		echo ""
@@ -347,11 +404,11 @@ show_menu() {
 		read -r choice
 		choice="${choice%% *}"
 		case "$choice" in
-			1) return 1 ;;
-			2) return 2 ;;
-			3) return 3 ;;
-			4) return 4 ;;
-			5) return 5 ;;
+			1) MENU_CHOICE=1; return 0 ;;
+			2) MENU_CHOICE=2; return 0 ;;
+			3) MENU_CHOICE=3; return 0 ;;
+			4) MENU_CHOICE=4; return 0 ;;
+			5) MENU_CHOICE=5; return 0 ;;
 			*) warn "Введите число от 1 до 5." ;;
 		esac
 	done
@@ -479,9 +536,10 @@ main() {
 	# Interactive menu: no args and TTY
 	if [[ $# -eq 0 ]] && [[ -t 0 ]]; then
 		check_docker
+		MENU_CHOICE=0
 		show_menu
-		local choice=$?
-		case $choice in
+		choice="${MENU_CHOICE:-0}"
+		case "$choice" in
 			1) cmd_install ;;
 			2) cmd_update ;;
 			3) cmd_config ;;
