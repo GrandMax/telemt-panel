@@ -1,8 +1,8 @@
 # ==========================
 # Stage 1: Build
 # ==========================
-# Full bookworm (not slim) for reliable build: gcc, libc headers for nix/notify deps
-FROM rust:1.85-bookworm AS builder
+# rust:bookworm = latest stable Rust (some deps require >1.85.1). Full image for build-essential.
+FROM rust:bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
