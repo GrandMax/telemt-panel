@@ -11,11 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-COPY Cargo.toml Cargo.lock* ./
-RUN mkdir src && echo 'fn main() {}' > src/main.rs && \
-    cargo build --release 2>/dev/null || true && \
-    rm -rf src
-
+# Один полный сбор без dummy-build: для arm64 (QEMU) два прохода cargo занимают часы
 COPY . .
 RUN rustc --version && cargo build --release && strip target/release/telemt
 
