@@ -21,10 +21,14 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install latest stable Rust toolchain
+    - name: Install Rust toolchain (1.85+ required for edition 2024)
       uses: dtolnay/rust-toolchain@stable
       with:
+        toolchain: 1.85
         components: rustfmt, clippy
+
+    - name: Show Rust version
+      run: rustc --version && cargo --version
 
     - name: Cache cargo registry & build artifacts
       uses: actions/cache@v4
