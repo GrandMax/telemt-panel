@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Telemt MTProxy installer: install | update | config | uninstall
+# Telemt MTProxy installer: fully interactive menu when run with no args (TTY).
 # Uses local templates from install/; builds telemt from repo Dockerfile.
-# Interactive when run in TTY; use env vars for non-interactive (INSTALL_DIR, LISTEN_PORT, FAKE_DOMAIN, etc.).
+# Non-interactive: pass action as first arg and use env vars (INSTALL_DIR, LISTEN_PORT, FAKE_DOMAIN, etc.).
 
 set -e
 
@@ -264,8 +264,7 @@ print_link() {
 	echo ""
 	echo "  Данные установки: ${INSTALL_DIR}"
 	echo "  Логи:            cd ${INSTALL_DIR} && docker compose logs -f"
-	echo "  Обновление:      $(rerun_cmd) update"
-	echo "  Смена домена:    $(rerun_cmd) config"
+	echo "  Меню управления: $(rerun_cmd)"
 	echo "  Остановка:       cd ${INSTALL_DIR} && docker compose down"
 	echo ""
 }
@@ -285,7 +284,11 @@ cmd_install() {
 
 cmd_update() {
 	local dir
-	dir="$(resolve_install_dir "${1:-$INSTALL_DIR}")"
+	if [[ $# -gt 0 ]]; then
+		dir="$(resolve_install_dir "${1}")"
+	else
+		dir="$(prompt_install_dir_existing "${INSTALL_DIR}")"
+	fi
 	if [[ ! -d "$dir" ]] || [[ ! -f "${dir}/docker-compose.yml" ]] || [[ ! -f "${dir}/telemt.toml" ]]; then
 		err "Не похоже на установку telemt (нет docker-compose.yml или telemt.toml): ${dir}"
 	fi
@@ -300,8 +303,63 @@ get_install_dir() {
 	resolve_install_dir "${1:-$INSTALL_DIR}"
 }
 
+# Prompt for existing install directory (for update/config/uninstall). Returns absolute path.
+# Usage: dir=$(prompt_install_dir_existing)  # interactive
+# Or pass default: prompt_install_dir_existing "/path/default"
+prompt_install_dir_existing() {
+	local default="${1:-$(pwd)/mtproxy-data}"
+	default="$(resolve_install_dir "$default")"
+	if [[ -t 0 ]]; then
+		while true; do
+			echo -n "Каталог установки [${default}]: "
+			read -r input
+			[[ -z "$input" ]] && input="$default"
+			local dir
+			dir="$(resolve_install_dir "$input")"
+			if [[ ! -d "$dir" ]]; then
+				warn "Каталог не найден: ${dir}"
+				continue
+			fi
+			if [[ ! -f "${dir}/docker-compose.yml" ]] || [[ ! -f "${dir}/telemt.toml" ]]; then
+				warn "Не похоже на установку telemt (нет docker-compose.yml или telemt.toml). Укажите другой каталог."
+				continue
+			fi
+			echo "$dir"
+			return
+		done
+	fi
+	echo "$default"
+}
+
+# Show main menu, return 1-5 (5=exit). Only call when [[ -t 0 ]].
+show_menu() {
+	while true; do
+		echo ""
+		echo "  ${GREEN}Telemt MTProxy — установка и управление${NC}"
+		echo ""
+		echo "  1) Установка (новая установка в каталог)"
+		echo "  2) Обновление (пересборка и перезапуск)"
+		echo "  3) Смена домена (SNI)"
+		echo "  4) Удаление"
+		echo "  5) Выход"
+		echo ""
+		echo -n "Выберите действие [1-5]: "
+		read -r choice
+		choice="${choice%% *}"
+		case "$choice" in
+			1) return 1 ;;
+			2) return 2 ;;
+			3) return 3 ;;
+			4) return 4 ;;
+			5) return 5 ;;
+			*) warn "Введите число от 1 до 5." ;;
+		esac
+	done
+}
+
 cmd_config() {
 	local new_domain=""
+	local dir=""
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 			--sni) new_domain="$2"; shift 2 ;;
@@ -309,8 +367,13 @@ cmd_config() {
 		esac
 	done
 
-	local dir
-	dir=$(get_install_dir)
+	if [[ -n "$new_domain" ]]; then
+		dir="$(get_install_dir)"
+	else
+		# Interactive: first ask for install dir
+		dir="$(prompt_install_dir_existing "${INSTALL_DIR}")"
+	fi
+
 	if [[ ! -f "${dir}/telemt.toml" ]] || [[ ! -f "${dir}/traefik/dynamic/tcp.yml" ]]; then
 		err "Каталог установки не найден или неполный: ${dir}"
 	fi
@@ -324,7 +387,7 @@ cmd_config() {
 			read -r new_domain
 			[[ -z "$new_domain" ]] && new_domain="$current_domain"
 		else
-			err "Укажите домен: install.sh config --sni example.com"
+			err "Без TTY укажите домен через env FAKE_DOMAIN или аргумент: install.sh config --sni example.com"
 		fi
 	fi
 
@@ -364,7 +427,12 @@ cmd_uninstall() {
 				;;
 		esac
 	done
-	dir="$(resolve_install_dir "${dir:-$INSTALL_DIR}")"
+
+	if [[ -z "$dir" ]] && [[ -t 0 ]]; then
+		dir="$(prompt_install_dir_existing "${INSTALL_DIR}")"
+	else
+		dir="$(resolve_install_dir "${dir:-$INSTALL_DIR}")"
+	fi
 
 	if [[ ! -d "$dir" ]]; then
 		err "Каталог не найден: ${dir}"
@@ -389,25 +457,50 @@ cmd_uninstall() {
 usage() {
 	echo "Использование: $0 [install | update | config | uninstall] [опции]"
 	echo ""
-	echo "  install   — установка (по умолчанию). Интерактивно запрашивает каталог, порт и домен SNI."
-	echo "  update    — обновить образ telemt и перезапустить. Опция: каталог установки."
-	echo "  config    — сменить домен Fake TLS (SNI). Опции: --sni DOMAIN или интерактивно."
-	echo "  uninstall — удалить установку. Опции: -y (без подтверждения), каталог."
+	echo "  Без аргументов (при наличии TTY): интерактивное меню — выбор действия и ввод всех"
+	echo "  параметров диалогами внутри скрипта (каталог, порт, домен SNI, подтверждения)."
 	echo ""
-	echo "Переменные окружения (без TTY): INSTALL_DIR, LISTEN_PORT, FAKE_DOMAIN, FAKE_DOMAIN_FROM_ENV."
+	echo "  С аргументом действия — для скриптов/CI, параметры из переменных окружения:"
+	echo "  INSTALL_DIR, LISTEN_PORT, FAKE_DOMAIN, FAKE_DOMAIN_FROM_ENV. Для config без TTY:"
+	echo "  FAKE_DOMAIN или --sni DOMAIN. Для uninstall: INSTALL_DIR, при необходимости -y."
+	echo ""
+	echo "  install   — установка"
+	echo "  update    — обновление образа и перезапуск"
+	echo "  config    — смена домена Fake TLS (SNI)"
+	echo "  uninstall — удаление установки"
 	exit 0
 }
 
 main() {
+	if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+		usage
+	fi
+
+	# Interactive menu: no args and TTY
+	if [[ $# -eq 0 ]] && [[ -t 0 ]]; then
+		check_docker
+		show_menu
+		local choice=$?
+		case $choice in
+			1) cmd_install ;;
+			2) cmd_update ;;
+			3) cmd_config ;;
+			4) cmd_uninstall ;;
+			5) info "Выход."; exit 0 ;;
+			*) exit 0 ;;
+		esac
+		return
+	fi
+
+	# Non-interactive: action from first argument, params from env
 	local cmd="${1:-install}"
 	if [[ $# -gt 0 ]]; then shift; fi
 	case "$cmd" in
-		-h|--help) usage ;;
 		install)  cmd_install "$@" ;;
 		update)   cmd_update "$@" ;;
 		config)   cmd_config "$@" ;;
 		uninstall) cmd_uninstall "$@" ;;
-		*) err "Неизвестная подкоманда: $cmd. Используйте: install | update | config | uninstall" ;;
+		*) err "Неизвестная подкоманда: $cmd. Запустите без аргументов для меню или: install | update | config | uninstall" ;;
 	esac
 }
 
