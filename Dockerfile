@@ -1,10 +1,12 @@
 # ==========================
 # Stage 1: Build
 # ==========================
-FROM rust:1.85-slim-bookworm AS builder
+# Full bookworm (not slim) for reliable build: gcc, libc headers for nix/notify deps
+FROM rust:1.85-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -15,7 +17,7 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs && \
     rm -rf src
 
 COPY . .
-RUN cargo build --release && strip target/release/telemt
+RUN rustc --version && cargo build --release && strip target/release/telemt
 
 # ==========================
 # Stage 2: Runtime
