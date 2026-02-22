@@ -152,6 +152,9 @@ prompt_port() {
 					[[ -z "$input" ]] && input=443
 				fi
 			done
+		else
+			# Неинтерактивно: порт 443 свободен — используем 443 или LISTEN_PORT из env
+			LISTEN_PORT="${LISTEN_PORT:-443}"
 		fi
 	fi
 }
@@ -259,7 +262,7 @@ run_compose() {
 		docker compose up -d
 	else
 		info "Сборка образа telemt и запуск контейнеров..."
-		docker compose build --no-cache telemt 2>/dev/null || docker compose build telemt
+		docker compose build --no-cache telemt || docker compose build telemt
 		docker compose up -d
 	fi
 	info "Контейнеры запущены."
