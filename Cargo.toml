@@ -68,7 +68,3 @@ tokio-test = "0.4"
 criterion = "0.5"
 proptest = "1.4"
 futures = "0.3"
-
-[[bench]]
-name = "crypto_bench"
-harness = false

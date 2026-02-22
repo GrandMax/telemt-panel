@@ -9,10 +9,9 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 use tracing::{debug, warn};
 
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::ClientConfig;
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, Error as RustlsError};
+use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::Error as RustlsError;
 
 use x509_parser::prelude::FromDer;
 use x509_parser::certificate::X509Certificate;
@@ -21,64 +20,19 @@ use crate::crypto::SecureRandom;
 use crate::protocol::constants::{TLS_RECORD_APPLICATION, TLS_RECORD_HANDSHAKE};
 use crate::tls_front::types::{ParsedServerHello, TlsExtension, TlsFetchResult, ParsedCertificateInfo};
 
-/// No-op verifier: accept any certificate (we only need lengths and metadata).
-#[derive(Debug)]
-struct NoVerify;
-
-impl ServerCertVerifier for NoVerify {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, RustlsError> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        use rustls::SignatureScheme::*;
-        vec![
-            RSA_PKCS1_SHA256,
-            RSA_PSS_SHA256,
-            ECDSA_NISTP256_SHA256,
-            ECDSA_NISTP384_SHA384,
-        ]
-    }
-}
-
+/// Build TLS client config with Mozilla root store for certificate verification.
+/// Verification is required so that the fallback TLS fetch is not vulnerable to MITM.
 fn build_client_config() -> Arc<ClientConfig> {
-    let root = rustls::RootCertStore::empty();
+    let root_store = rustls::RootCertStore::from_iter(
+        webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
+    );
 
     let provider = rustls::crypto::ring::default_provider();
-    let mut config = ClientConfig::builder_with_provider(Arc::new(provider))
+    let config = ClientConfig::builder_with_provider(Arc::new(provider))
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
         .expect("protocol versions")
-        .with_root_certificates(root)
+        .with_root_certificates(root_store)
         .with_no_client_auth();
-
-    config
-        .dangerous()
-        .set_certificate_verifier(Arc::new(NoVerify));
 
     Arc::new(config)
 }
