@@ -17,7 +17,7 @@ TELEMT_INTERNAL_PORT="${TELEMT_INTERNAL_PORT:-1234}"
 LISTEN_PORT="${LISTEN_PORT:-443}"
 TELEMT_PREBUILT_IMAGE="${TELEMT_PREBUILT_IMAGE:-grandmax/telemt-pannel:latest}"
 TELEMT_IMAGE_SOURCE="${TELEMT_IMAGE_SOURCE:-prebuilt}"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.0.1"
 
 # Режим «plain»: без цветов и с ASCII-рамкой (для dumb-терминала или когда вывод не в TTY)
 if [[ "${TERM:-dumb}" == "dumb" ]] || [[ ! -t 1 ]]; then
@@ -257,20 +257,48 @@ err() {
 	exit 1
 }
 
+TELEMT_INSTALL_BASE_URL="${TELEMT_INSTALL_BASE_URL:-https://raw.githubusercontent.com/GrandMax/telemt-pannel/main/install}"
+
+ensure_install_templates() {
+	local required="docker-compose.yml docker-compose.prebuilt.yml telemt.toml.example traefik-dynamic-tcp.yml"
+	local have_all=1
+	local f
+	for f in $required; do
+		if [[ ! -f "${REPO_ROOT}/install/${f}" ]]; then
+			have_all=0
+			break
+		fi
+	done
+	[[ $have_all -eq 1 ]] && return 0
+
+	if [[ -t 0 ]]; then
+		show_warning "Шаблоны не найдены в ${REPO_ROOT}/install/."
+		if ! prompt_yes_no "Скачать с GitHub (GrandMax/telemt-pannel)?" "y"; then
+			err "Шаблоны не найдены в ${REPO_ROOT}/install/. Запускайте скрипт из корня репозитория или разрешите загрузку с GitHub."
+		fi
+	else
+		show_info "Шаблоны не найдены. Пытаюсь скачать с GitHub..."
+	fi
+
+	local cache="${HOME:-/tmp}/.mtpannel-templates"
+	mkdir -p "${cache}/install"
+	for f in $required; do
+		if ! curl -sSL -o "${cache}/install/${f}" "${TELEMT_INSTALL_BASE_URL}/${f}"; then
+			err "Не удалось скачать шаблон: ${f}"
+		fi
+	done
+	REPO_ROOT="$cache"
+	show_info "Шаблоны загружены в ${REPO_ROOT}/install/"
+}
+
 # --- Копирование конфигов и запуск ---
 copy_and_configure() {
+	ensure_install_templates
 	show_info "Создаю каталоги и копирую шаблоны из ${REPO_ROOT}/install/ ..."
 	mkdir -p "${INSTALL_DIR}"
 	mkdir -p "${INSTALL_DIR}/traefik/dynamic" "${INSTALL_DIR}/traefik/static"
 
-	if [[ ! -f "${REPO_ROOT}/install/docker-compose.yml" ]] || [[ ! -f "${REPO_ROOT}/install/telemt.toml.example" ]] || [[ ! -f "${REPO_ROOT}/install/traefik-dynamic-tcp.yml" ]]; then
-		err "Шаблоны не найдены в ${REPO_ROOT}/install/. Запускайте скрипт из корня репозитория telemt."
-	fi
-
 	if [[ "$TELEMT_IMAGE_SOURCE" == "prebuilt" ]]; then
-		if [[ ! -f "${REPO_ROOT}/install/docker-compose.prebuilt.yml" ]]; then
-			err "Шаблон docker-compose.prebuilt.yml не найден."
-		fi
 		sed -e "s|image: grandmax/telemt-pannel:latest|image: ${TELEMT_PREBUILT_IMAGE}|g" \
 			"${REPO_ROOT}/install/docker-compose.prebuilt.yml" > "${INSTALL_DIR}/docker-compose.yml"
 	else
