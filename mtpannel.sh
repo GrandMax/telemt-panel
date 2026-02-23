@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Telemt MTProxy — интерактивное управление (установка, обновление, смена SNI, удаление).
+# MTpannel — интерактивное управление (установка, обновление, смена SNI, удаление).
 # С псевдографикой: рамки, разделители, цветные сообщения.
 # Без аргументов и TTY: главное меню. С аргументом: install | update | config | uninstall (параметры из env).
 
@@ -17,6 +17,7 @@ TELEMT_INTERNAL_PORT="${TELEMT_INTERNAL_PORT:-1234}"
 LISTEN_PORT="${LISTEN_PORT:-443}"
 TELEMT_PREBUILT_IMAGE="${TELEMT_PREBUILT_IMAGE:-grandmax/telemt-pannel:latest}"
 TELEMT_IMAGE_SOURCE="${TELEMT_IMAGE_SOURCE:-prebuilt}"
+SCRIPT_VERSION="1.0.0"
 
 # Режим «plain»: без цветов и с ASCII-рамкой (для dumb-терминала или когда вывод не в TTY)
 if [[ "${TERM:-dumb}" == "dumb" ]] || [[ ! -t 1 ]]; then
@@ -110,16 +111,16 @@ show_warning() {
 }
 
 show_info() {
-	printf '%s%s%s %s\n' "${CYAN}" "ℹ" "${NC}" "$*"
+	printf '%s%s%s %s\n' "${CYAN}" "ℹ" "${NC}" "$*" >&2
 }
 
 # --- Ввод (с защитой от set -e) ---
 prompt_input() {
 	local prompt_text="$1"
 	local default="$2"
-	printf '%s' "${GREEN}${prompt_text}${NC}"
-	[[ -n "$default" ]] && printf ' [%s]' "$default"
-	printf ': '
+	printf '%s' "${GREEN}${prompt_text}${NC}" >&2
+	[[ -n "$default" ]] && printf ' [%s]' "$default" >&2
+	printf ': ' >&2
 	read -r input || true
 	if [[ -z "$input" ]] && [[ -n "$default" ]]; then
 		echo "$default"
@@ -131,7 +132,7 @@ prompt_input() {
 prompt_yes_no() {
 	local prompt_text="$1"
 	local default="${2:-y}"
-	printf '%s (y/n) [%s]: ' "${GREEN}${prompt_text}${NC}" "$default"
+	printf '%s (y/n) [%s]: ' "${GREEN}${prompt_text}${NC}" "$default" >&2
 	read -r ans || true
 	if [[ -z "$ans" ]]; then
 		ans="$default"
@@ -149,9 +150,9 @@ prompt_menu_option() {
 	local max="${3:-5}"
 	local selected
 	while true; do
-		printf '%s (%s-%s): ' "${GREEN}${prompt_text}${NC}" "$min" "$max"
+		printf '%s (%s-%s): ' "${GREEN}${prompt_text}${NC}" "$min" "$max" >&2
 		read -r selected || true
-		printf '\n'
+		printf '\n' >&2
 		if [[ "$selected" =~ ^[0-9]+$ ]] && (( selected >= min && selected <= max )); then
 			echo "$selected"
 			return 0
@@ -259,6 +260,7 @@ err() {
 # --- Копирование конфигов и запуск ---
 copy_and_configure() {
 	show_info "Создаю каталоги и копирую шаблоны из ${REPO_ROOT}/install/ ..."
+	mkdir -p "${INSTALL_DIR}"
 	mkdir -p "${INSTALL_DIR}/traefik/dynamic" "${INSTALL_DIR}/traefik/static"
 
 	if [[ ! -f "${REPO_ROOT}/install/docker-compose.yml" ]] || [[ ! -f "${REPO_ROOT}/install/telemt.toml.example" ]] || [[ ! -f "${REPO_ROOT}/install/traefik-dynamic-tcp.yml" ]]; then
@@ -302,7 +304,7 @@ run_compose() {
 	cd "${INSTALL_DIR}"
 	if [[ "${TELEMT_IMAGE_SOURCE}" == "prebuilt" ]]; then
 		show_info "Загрузка образа telemt и запуск контейнеров..."
-		docker compose pull telemt
+		docker compose --progress plain pull telemt
 		docker compose up -d
 	else
 		show_info "Сборка образа telemt и запуск контейнеров..."
@@ -380,19 +382,38 @@ get_install_dir() {
 
 prompt_install_dir_existing() {
 	local default="${1:-$(pwd)/mtpannel-data}"
+	local offer_install="${2:-}"
 	default="$(resolve_install_dir "$default")"
 	if [[ -t 0 ]]; then
+		# Auto-detect: if default path is a valid install, offer to use it
+		if [[ -d "$default" ]] && [[ -f "${default}/docker-compose.yml" ]] && [[ -f "${default}/telemt.toml" ]]; then
+			if prompt_yes_no "Найден каталог установки: ${default}. Использовать?" "y"; then
+				echo "$default"
+				return 0
+			fi
+		fi
 		while true; do
-			input=$(prompt_input "Каталог установки" "$default")
+			input=$(prompt_input "Каталог установки (q — отмена)" "$default")
 			if [[ -z "$input" ]]; then input="$default"; fi
+			input_trimmed=$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')
+			if [[ "$input_trimmed" == "q" ]] || [[ "$input_trimmed" == "quit" ]] || [[ "$input_trimmed" == "отмена" ]] || [[ "$input_trimmed" == "cancel" ]] || [[ "$input_trimmed" == "exit" ]]; then
+				echo "CANCEL"
+				return 0
+			fi
 			local dir
 			dir="$(resolve_install_dir "$input")"
 			if [[ ! -d "$dir" ]]; then
-				show_warning "Каталог не найден: ${dir}"
+				show_warning "Каталог не найден: ${dir}. Введите другой путь или q для отмены."
+				if [[ -n "$offer_install" ]]; then
+					if prompt_yes_no "Выполнить новую установку в этот каталог?" "n"; then
+						echo "INSTALL:${dir}"
+						return 0
+					fi
+				fi
 				continue
 			fi
 			if [[ ! -f "${dir}/docker-compose.yml" ]] || [[ ! -f "${dir}/telemt.toml" ]]; then
-				show_warning "Не похоже на установку telemt. Укажите другой каталог."
+				show_warning "Не похоже на установку telemt. Укажите другой каталог или q для отмены."
 				continue
 			fi
 			echo "$dir"
@@ -406,7 +427,7 @@ prompt_install_dir_existing() {
 cmd_install() {
 	INSTALL_DIR="$(resolve_install_dir "$INSTALL_DIR")"
 
-	draw_section_header "Установка Telemt MTProxy" "$BOX_WIDTH"
+	draw_section_header "Установка MTpannel" "$BOX_WIDTH"
 	show_info "Каталог: ${INSTALL_DIR}"
 	echo ""
 
@@ -420,6 +441,15 @@ cmd_install() {
 			input=$(prompt_input "Каталог установки" "$INSTALL_DIR")
 			if [[ -n "$input" ]]; then INSTALL_DIR="$input"; fi
 			INSTALL_DIR="$(resolve_install_dir "$INSTALL_DIR")"
+		fi
+	fi
+
+	# If directory already has an installation, offer to update instead
+	if [[ -d "$INSTALL_DIR" ]] && [[ -f "${INSTALL_DIR}/docker-compose.yml" ]] && [[ -f "${INSTALL_DIR}/telemt.toml" ]] && [[ -t 0 ]]; then
+		show_info "В каталоге уже есть установка: ${INSTALL_DIR}"
+		if prompt_yes_no "Обновить (перейти в обновление)?" "y"; then
+			cmd_update "$INSTALL_DIR"
+			return 0
 		fi
 	fi
 
@@ -476,9 +506,9 @@ cmd_install() {
 	# Образ: 1 — готовый (по умолчанию), 2 — сборка из исходников
 	if [[ -t 0 ]]; then
 		draw_menu_options "Скачать готовый образ (${TELEMT_PREBUILT_IMAGE})" "Собрать из исходников (локально)"
-		printf '%s (1-2) [1]: ' "${GREEN}Выбор${NC}"
+		printf '%s (1-2) [1]: ' "${GREEN}Выбор${NC}" >&2
 		read -r img_choice || true
-		printf '\n'
+		printf '\n' >&2
 		img_choice="${img_choice%% *}"
 		if [[ "$img_choice" == "2" ]]; then
 			TELEMT_IMAGE_SOURCE=build
@@ -510,35 +540,88 @@ cmd_install() {
 	print_link
 }
 
+# Check for newer install.sh/mtpannel.sh and replace if running from repo root with write access.
+update_scripts_if_newer() {
+	show_info "Проверка новой версии скриптов в репозитории (SCRIPT_VERSION)..."
+	[[ -d "${REPO_ROOT}/install" ]] || return 0
+	[[ -f "${REPO_ROOT}/install.sh" ]] && [[ -f "${REPO_ROOT}/mtpannel.sh" ]] || return 0
+	[[ -w "${REPO_ROOT}/install.sh" ]] && [[ -w "${REPO_ROOT}/mtpannel.sh" ]] || return 0
+
+	local current="${SCRIPT_VERSION:-}"
+	local remote_ver=""
+	if [[ -d "${REPO_ROOT}/.git" ]]; then
+		(cd "${REPO_ROOT}" && git fetch origin 2>/dev/null) || true
+		remote_ver=$(cd "${REPO_ROOT}" && git show origin/HEAD:install.sh 2>/dev/null | head -25 | grep -E '^SCRIPT_VERSION="' | head -1 | sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p')
+	fi
+	if [[ -z "$remote_ver" ]]; then
+		remote_ver=$(curl -sL "https://raw.githubusercontent.com/GrandMax/telemt-pannel/main/install.sh" 2>/dev/null | head -25 | grep -E '^SCRIPT_VERSION="' | head -1 | sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p')
+	fi
+	[[ -n "$remote_ver" ]] || return 0
+
+	local latest
+	latest=$(printf '%s\n' "$current" "$remote_ver" | sort -V | tail -1)
+	if [[ "$latest" != "$remote_ver" ]] || [[ "$current" == "$remote_ver" ]]; then
+		show_info "Версия скриптов актуальна (${current})."
+		return 0
+	fi
+
+	if [[ -d "${REPO_ROOT}/.git" ]] && (cd "${REPO_ROOT}" && git show origin/HEAD:install.sh &>/dev/null); then
+		(cd "${REPO_ROOT}" && git checkout origin/HEAD -- install.sh mtpannel.sh 2>/dev/null) && show_success "Скрипты обновлены до версии ${remote_ver}."
+	else
+		local ok=1
+		if curl -sL -o "${REPO_ROOT}/install.sh.new" "https://raw.githubusercontent.com/GrandMax/telemt-pannel/main/install.sh" 2>/dev/null; then
+			mv "${REPO_ROOT}/install.sh.new" "${REPO_ROOT}/install.sh" && chmod +x "${REPO_ROOT}/install.sh" || ok=0
+		else
+			ok=0
+		fi
+		if [[ $ok -eq 1 ]] && curl -sL -o "${REPO_ROOT}/mtpannel.sh.new" "https://raw.githubusercontent.com/GrandMax/telemt-pannel/main/mtpannel.sh" 2>/dev/null; then
+			mv "${REPO_ROOT}/mtpannel.sh.new" "${REPO_ROOT}/mtpannel.sh" && chmod +x "${REPO_ROOT}/mtpannel.sh" && show_success "Скрипты обновлены до версии ${remote_ver}."
+		else
+			[[ $ok -eq 1 ]] || show_warning "Не удалось загрузить новые версии скриптов."
+		fi
+	fi
+}
+
 cmd_update() {
-	local dir
+	show_info "Обновление (Docker: pull или пересборка и перезапуск)..."
+	local dir result
 	if [[ $# -gt 0 ]]; then
 		dir="$(resolve_install_dir "${1}")"
 	else
-		dir="$(prompt_install_dir_existing "${INSTALL_DIR}")"
+		show_info "Укажите каталог установки."
+		result="$(prompt_install_dir_existing "${INSTALL_DIR}" "offer")"
+		if [[ "$result" == INSTALL:* ]]; then
+			INSTALL_DIR="${result#INSTALL:}"
+			cmd_install
+			return
+		fi
+		if [[ "$result" == "CANCEL" ]]; then
+			show_info "Отменено."
+			return
+		fi
+		dir="$result"
 	fi
 	if [[ ! -d "$dir" ]] || [[ ! -f "${dir}/docker-compose.yml" ]] || [[ ! -f "${dir}/telemt.toml" ]]; then
 		err "Не похоже на установку telemt: ${dir}"
 	fi
+	show_info "Каталог: ${dir}"
+	update_scripts_if_newer
 	local img_source=build
 	if [[ -f "${dir}/.env" ]]; then
 		local val
 		val=$(grep -E '^TELEMT_IMAGE_SOURCE=' "${dir}/.env" 2>/dev/null | cut -d= -f2-)
 		if [[ -n "$val" ]]; then img_source="$val"; fi
 	fi
-	show_info "Обновление образа telemt в ${dir} ..."
 	if [[ "$img_source" == "prebuilt" ]]; then
-		(cd "$dir" && docker compose pull telemt && docker compose up -d)
+		show_info "Скачиваю образ (pull)..."
+		(cd "$dir" && docker compose --progress plain pull telemt)
+		show_info "Перезапускаю контейнеры..."
+		(cd "$dir" && docker compose up -d)
 	else
-		if [[ -f "${dir}/.env" ]]; then
-			repo_root=""
-			repo_root=$(grep -E '^REPO_ROOT=' "${dir}/.env" 2>/dev/null | cut -d= -f2-)
-			if [[ -n "$repo_root" ]] && [[ -d "$repo_root/.git" ]] && [[ "$repo_root" == "${dir}"* ]]; then
-				show_info "Обновляю исходники в ${repo_root} ..."
-				(cd "$repo_root" && git pull --depth 1 2>/dev/null) || true
-			fi
-		fi
-		(cd "$dir" && docker compose build --no-cache telemt && docker compose up -d)
+		show_info "Пересборка образа (build)..."
+		(cd "$dir" && docker compose build telemt)
+		show_info "Перезапускаю контейнеры..."
+		(cd "$dir" && docker compose up -d)
 	fi
 	show_success "Готово."
 	INSTALL_DIR="$dir"
@@ -558,12 +641,25 @@ cmd_config() {
 	if [[ -n "$new_domain" ]]; then
 		dir="$(get_install_dir)"
 	else
-		dir="$(prompt_install_dir_existing "${INSTALL_DIR}")"
+		show_info "Укажите каталог установки."
+		local result
+		result="$(prompt_install_dir_existing "${INSTALL_DIR}" "offer")"
+		if [[ "$result" == INSTALL:* ]]; then
+			INSTALL_DIR="${result#INSTALL:}"
+			cmd_install
+			return
+		fi
+		if [[ "$result" == "CANCEL" ]]; then
+			show_info "Отменено."
+			return
+		fi
+		dir="$result"
 	fi
 
 	if [[ ! -f "${dir}/telemt.toml" ]] || [[ ! -f "${dir}/traefik/dynamic/tcp.yml" ]]; then
 		err "Каталог установки не найден или неполный: ${dir}"
 	fi
+	show_info "Каталог: ${dir}"
 
 	local current_domain
 	current_domain=$(grep -E '^[[:space:]]*tls_domain[[:space:]]*=' "${dir}/telemt.toml" | head -n1 | sed -E 's/.*=[[:space:]]*"([^"]+)".*/\1/')
@@ -593,7 +689,8 @@ cmd_config() {
 		fi
 	}
 
-	show_success "Домен обновлён на ${new_domain}. Перезапуск контейнеров..."
+	show_success "Домен обновлён на ${new_domain}."
+	show_info "Перезапускаю контейнеры..."
 	(cd "$dir" && docker compose up -d --force-recreate)
 	INSTALL_DIR="$dir"
 	print_link
@@ -614,7 +711,12 @@ cmd_uninstall() {
 	done
 
 	if [[ -z "$dir" ]] && [[ -t 0 ]]; then
+		show_info "Укажите каталог установки для удаления."
 		dir="$(prompt_install_dir_existing "${INSTALL_DIR}")"
+		if [[ "$dir" == "CANCEL" ]]; then
+			show_info "Отменено."
+			return 0
+		fi
 	else
 		dir="$(resolve_install_dir "${dir:-$INSTALL_DIR}")"
 	fi
@@ -625,19 +727,44 @@ cmd_uninstall() {
 	if [[ ! -f "${dir}/docker-compose.yml" ]] || [[ ! -f "${dir}/telemt.toml" ]]; then
 		err "Не похоже на установку telemt: ${dir}"
 	fi
+	show_info "Каталог: ${dir}"
+
+	# Собрать список образов до любых деструктивных действий
+	local uninstall_images
+	uninstall_images=$(grep -E '^[[:space:]]+image:[[:space:]]+' "${dir}/docker-compose.yml" 2>/dev/null | sed -E 's/^[[:space:]]*image:[[:space:]]*["]?([^"]+)["]?.*/\1/' | tr -d ' \r' | sort -u || true)
+	uninstall_images=$(printf '%s' "$uninstall_images" | grep -v '^$' || true)
 
 	if [[ -z "$force" ]] && [[ -t 0 ]]; then
 		draw_section_header "Удаление установки" "$BOX_WIDTH"
 		draw_info_row "Каталог" "$dir"
 		echo ""
-		if ! prompt_yes_no "Удалить установку?" "n"; then
+		if ! prompt_yes_no "Удалить установку?" "y"; then
 			show_info "Отменено."
 			return 0
 		fi
 	fi
 
-	show_info "Останавливаю контейнеры..."
-	(cd "$dir" && docker compose down -v 2>/dev/null) || true
+	show_info "Выполняю: docker compose down -v (каталог: ${dir})"
+	(cd "$dir" && docker compose down -v) || true
+	show_info "Контейнеры и тома удалены."
+
+	if [[ -n "$uninstall_images" ]] && [[ -t 0 ]]; then
+		echo ""
+		show_info "Образы Docker, использовавшиеся установкой:"
+		printf '%s\n' "$uninstall_images" | while read -r img; do [[ -n "$img" ]] && echo "  - $img"; done
+		show_warning "Образ traefik может использоваться другими проектами."
+		if prompt_yes_no "Удалить эти образы?" "n"; then
+			local removed=0
+			while IFS= read -r img; do
+				[[ -z "$img" ]] && continue
+				show_info "Удаляю образ: ${img}"
+				if docker rmi "$img" 2>/dev/null; then removed=$((removed + 1)); else show_warning "Не удалось удалить образ: $img"; fi
+			done <<< "$uninstall_images"
+			[[ $removed -gt 0 ]] && show_info "Образы удалены."
+		fi
+		echo ""
+	fi
+
 	show_info "Удаляю каталог ${dir} ..."
 	rm -rf "$dir"
 	show_success "Готово."
@@ -645,10 +772,10 @@ cmd_uninstall() {
 
 # --- Главное меню ---
 show_main_menu() {
-	draw_section_header "Telemt MTProxy — установка и управление" "$BOX_WIDTH"
+	draw_section_header "MTpannel" "$BOX_WIDTH"
 	draw_menu_options \
 		"Установка (новая установка в каталог)" \
-		"Обновление (пересборка и перезапуск)" \
+		"Обновление (Docker: pull или пересборка и перезапуск)" \
 		"Смена домена (SNI)" \
 		"Удаление" \
 		"Выход"
@@ -677,7 +804,14 @@ main() {
 		check_docker
 		while true; do
 			clear_screen
-			choice=$(show_main_menu)
+			draw_section_header "MTpannel" "$BOX_WIDTH"
+			draw_menu_options \
+				"Установка (новая установка в каталог)" \
+				"Обновление (Docker: pull или пересборка и перезапуск)" \
+				"Смена домена (SNI)" \
+				"Удаление" \
+				"Выход"
+			choice=$(prompt_menu_option "Выберите действие" 1 5)
 			case "$choice" in
 				1) cmd_install; printf '\n'; printf 'Нажмите Enter для возврата в меню...'; read -r || true ;;
 				2) cmd_update; printf '\n'; printf 'Нажмите Enter для возврата в меню...'; read -r || true ;;
