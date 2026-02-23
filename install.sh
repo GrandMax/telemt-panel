@@ -12,7 +12,7 @@ TELEMT_INTERNAL_PORT="${TELEMT_INTERNAL_PORT:-1234}"
 LISTEN_PORT="${LISTEN_PORT:-443}"
 TELEMT_PREBUILT_IMAGE="${TELEMT_PREBUILT_IMAGE:-grandmax/telemt-pannel:latest}"
 TELEMT_IMAGE_SOURCE="${TELEMT_IMAGE_SOURCE:-prebuilt}"
-SCRIPT_VERSION="1.0.1"
+SCRIPT_VERSION="1.0.2"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -424,6 +424,10 @@ cmd_install() {
 		fi
 	fi
 	prompt_port
+	if [[ ! -t 0 ]] && [[ "${LISTEN_PORT:-443}" == "443" ]] && is_port_in_use 443; then
+		LISTEN_PORT=1443
+		warn "Порт 443 занят. Используется порт 1443."
+	fi
 	prompt_fake_domain
 	confirm_install
 	prompt_image_source
@@ -447,14 +451,31 @@ cmd_install() {
 	copy_and_configure
 	run_compose
 	print_link
+
+	# When run via curl|bash, offer to save script to current dir for management
+	if [[ ! -f "$0" ]] && [[ -t 0 ]]; then
+		echo -n "Сохранить актуальную версию скрипта в текущий каталог для управления? (Y/n): " >&2
+		read -r ans || true
+		ans_lower=$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')
+		if [[ -z "$ans" ]] || [[ "$ans_lower" == "y" ]] || [[ "$ans_lower" == "yes" ]] || [[ "$ans_lower" == "д" ]]; then
+			local save_url="https://raw.githubusercontent.com/GrandMax/telemt-pannel/main/install.sh"
+			local save_path="./install.sh"
+			if curl -sSL "$save_url" -o "$save_path" 2>/dev/null; then
+				chmod +x "$save_path"
+				info "Скрипт сохранён: $(pwd)/install.sh"
+			else
+				warn "Не удалось скачать скрипт. Сохраните вручную: curl -sSL $save_url -o install.sh && chmod +x install.sh"
+			fi
+		fi
+	fi
 }
 
-# Check for newer install.sh/mtpannel.sh and replace if running from repo root with write access.
+# Check for newer install.sh and replace if running from repo root with write access.
 update_scripts_if_newer() {
-	info "Проверка новой версии скриптов в репозитории (SCRIPT_VERSION)..."
+	info "Проверка новой версии скрипта в репозитории (SCRIPT_VERSION)..."
 	[[ -d "${REPO_ROOT}/install" ]] || return 0
-	[[ -f "${REPO_ROOT}/install.sh" ]] && [[ -f "${REPO_ROOT}/mtpannel.sh" ]] || return 0
-	[[ -w "${REPO_ROOT}/install.sh" ]] && [[ -w "${REPO_ROOT}/mtpannel.sh" ]] || return 0
+	[[ -f "${REPO_ROOT}/install.sh" ]] || return 0
+	[[ -w "${REPO_ROOT}/install.sh" ]] || return 0
 
 	local current="${SCRIPT_VERSION:-}"
 	local remote_ver=""
@@ -470,23 +491,17 @@ update_scripts_if_newer() {
 	local latest
 	latest=$(printf '%s\n' "$current" "$remote_ver" | sort -V | tail -1)
 	if [[ "$latest" != "$remote_ver" ]] || [[ "$current" == "$remote_ver" ]]; then
-		info "Версия скриптов актуальна (${current})."
+		info "Версия скрипта актуальна (${current})."
 		return 0
 	fi
 
 	if [[ -d "${REPO_ROOT}/.git" ]] && (cd "${REPO_ROOT}" && git show origin/HEAD:install.sh &>/dev/null); then
-		(cd "${REPO_ROOT}" && git checkout origin/HEAD -- install.sh mtpannel.sh 2>/dev/null) && info "Скрипты обновлены до версии ${remote_ver}."
+		(cd "${REPO_ROOT}" && git checkout origin/HEAD -- install.sh 2>/dev/null) && info "Скрипт обновлён до версии ${remote_ver}."
 	else
-		local ok=1
 		if curl -sL -o "${REPO_ROOT}/install.sh.new" "https://raw.githubusercontent.com/GrandMax/telemt-pannel/main/install.sh" 2>/dev/null; then
-			mv "${REPO_ROOT}/install.sh.new" "${REPO_ROOT}/install.sh" && chmod +x "${REPO_ROOT}/install.sh" || ok=0
+			mv "${REPO_ROOT}/install.sh.new" "${REPO_ROOT}/install.sh" && chmod +x "${REPO_ROOT}/install.sh" && info "Скрипт обновлён до версии ${remote_ver}."
 		else
-			ok=0
-		fi
-		if [[ $ok -eq 1 ]] && curl -sL -o "${REPO_ROOT}/mtpannel.sh.new" "https://raw.githubusercontent.com/GrandMax/telemt-pannel/main/mtpannel.sh" 2>/dev/null; then
-			mv "${REPO_ROOT}/mtpannel.sh.new" "${REPO_ROOT}/mtpannel.sh" && chmod +x "${REPO_ROOT}/mtpannel.sh" && info "Скрипты обновлены до версии ${remote_ver}."
-		else
-			[[ $ok -eq 1 ]] || warn "Не удалось загрузить новые версии скриптов."
+			warn "Не удалось загрузить новую версию скрипта."
 		fi
 	fi
 }
@@ -792,8 +807,11 @@ main() {
 		usage
 	fi
 
-	# Interactive menu: no args and TTY
-	if [[ $# -eq 0 ]] && [[ -t 0 ]]; then
+	# Interactive menu: no args (when run via curl|bash, redirect stdin from /dev/tty so menu works)
+	if [[ $# -eq 0 ]]; then
+		if [[ ! -t 0 ]] && [[ -r /dev/tty ]]; then
+			exec 0</dev/tty
+		fi
 		check_docker
 		while true; do
 			MENU_CHOICE=0

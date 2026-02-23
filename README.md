@@ -9,24 +9,26 @@
 
 ## Установка на сервере (всё с GitHub)
 
+**Рекомендуемый способ** — сначала скачать скрипт, затем запустить (скрипт остаётся в каталоге для меню управления: обновление, смена домена, удаление):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/GrandMax/telemt-pannel/main/install.sh -o install.sh && chmod +x install.sh && bash install.sh
+```
+
+**Альтернатива** — запуск без сохранения скрипта (одной строкой). Меню выбора действий (1–5) показывается интерактивно; для последующего управления установкой скрипт нужно будет скачать снова или использовать сохранённую копию:
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/GrandMax/telemt-pannel/main/install.sh | bash
 ```
 
-или с интерактивным меню и псевдографикой:
-
-```bash
-curl -sSL https://raw.githubusercontent.com/GrandMax/telemt-pannel/main/mtpannel.sh | bash
-```
-
 Скрипт установит Docker (если нужно), создаст каталог установки, скачает или соберёт образ telemt, настроит Traefik и выведет ссылку вида `tg://proxy?server=...&port=443&secret=...` — добавьте её в Telegram (Настройки → Данные и память → Использовать прокси).
 
-- Каталог установки по умолчанию: `./mtpannel-data`. Другой: `INSTALL_DIR=/opt/mtpannel curl -sSL ... | bash`.
-- Домен маскировки по умолчанию задаётся в скрипте (например `pikabu.ru`). Без TTY: `FAKE_DOMAIN=1c.ru curl -sSL ... | bash`.
+- Каталог установки по умолчанию: `./mtpannel-data`. Другой: `INSTALL_DIR=/opt/mtpannel bash install.sh` (или через env при `curl ... | bash`).
+- Домен маскировки по умолчанию задаётся в скрипте (например `pikabu.ru`). Без TTY: `FAKE_DOMAIN=1c.ru bash install.sh`.
 
 ## Локальный запуск (клонирование репозитория)
 
-После `git clone https://github.com/GrandMax/telemt-pannel.git && cd telemt-pannel` запустите `./install.sh` или `./mtpannel.sh`. Скрипт по умолчанию использует шаблоны из текущего каталога. При выборе «Собрать из исходников» скрипт при необходимости сам проверит наличие репозитория, установит зависимости (Docker, git) и при отсутствии нужных файлов клонирует [GrandMax/telemt-pannel](https://github.com/GrandMax/telemt-pannel) во внутренний каталог установки. Либо настройте вручную и поднимите без скрипта:
+После `git clone https://github.com/GrandMax/telemt-pannel.git && cd telemt-pannel` запустите `./install.sh`. Скрипт по умолчанию использует шаблоны из текущего каталога. При выборе «Собрать из исходников» скрипт при необходимости сам проверит наличие репозитория, установит зависимости (Docker, git) и при отсутствии нужных файлов клонирует [GrandMax/telemt-pannel](https://github.com/GrandMax/telemt-pannel) во внутренний каталог установки. Либо настройте вручную и поднимите без скрипта:
 
 1. Сгенерируйте секрет: `openssl rand -hex 16`. Скопируйте `install/telemt.toml.example` в каталог установки как `telemt.toml`, подставьте секрет и домен в `tls_domain`.
 2. В `traefik/dynamic/tcp.yml` домен в `HostSNI(...)` должен совпадать с `tls_domain` в `telemt.toml`.
