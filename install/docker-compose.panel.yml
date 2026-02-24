@@ -59,7 +59,7 @@ services:
   panel:
     build:
       context: ${REPO_ROOT}/panel
-      dockerfile: ${REPO_ROOT}/panel/Dockerfile
+      dockerfile: Dockerfile
     image: panel:local
     container_name: mtpanel-panel
     restart: unless-stopped

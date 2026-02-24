@@ -6,7 +6,15 @@
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-INSTALL_DIR="${INSTALL_DIR:-/opt/mtpanel-data}"
+# Домашний каталог текущего пользователя (не привязываемся к root)
+USER_HOME="${HOME}"
+[[ -z "$USER_HOME" ]] && USER_HOME="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6)"
+[[ -z "$USER_HOME" ]] && USER_HOME="$(eval echo "~$(id -un)" 2>/dev/null)"
+USER_HOME="${USER_HOME:-/tmp}"
+# По умолчанию всё в домашнем каталоге (временно без вариативности)
+DEFAULT_INSTALL_DIR="${USER_HOME}/mtpanel-data"
+DEFAULT_TEMPLATES_CACHE="${USER_HOME}/.mtpanel-templates"
+INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 FAKE_DOMAIN="${FAKE_DOMAIN:-pikabu.ru}"
 TELEMT_INTERNAL_PORT="${TELEMT_INTERNAL_PORT:-1234}"
 LISTEN_PORT="${LISTEN_PORT:-443}"
@@ -129,40 +137,15 @@ prompt_install_dir() {
 		return
 	fi
 	if [[ -t 0 ]]; then
-		local opt_dir="/opt/mtpanel-data"
-		local cur_dir
-		cur_dir="$(pwd)/mtpanel-data"
 		echo "" >&2
-		echo "Выберите каталог установки:" >&2
-		echo "  1) ${opt_dir}  (рекомендуется)" >&2
-		if [[ "$(resolve_install_dir "$cur_dir")" != "$opt_dir" ]]; then
-			echo "  2) ${cur_dir}  (текущий каталог)" >&2
-			echo "  3) Указать вручную" >&2
-			echo "" >&2
-			echo -n "Вариант [1]: " >&2
-			read -r choice || true
-			choice="${choice:-1}"
+		echo -n "Каталог установки [${DEFAULT_INSTALL_DIR}]: " >&2
+		read -r input || true
+		input="$(printf '%s' "$input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+		if [[ -n "$input" ]]; then
+			INSTALL_DIR="$input"
 		else
-			echo "  2) Указать вручную" >&2
-			echo "" >&2
-			echo -n "Вариант [1]: " >&2
-			read -r choice || true
-			choice="${choice:-1}"
-			# Remap: if cur_dir == opt_dir, option 2 means "custom"
-			if [[ "$choice" == "2" ]]; then choice="3"; fi
+			INSTALL_DIR="$DEFAULT_INSTALL_DIR"
 		fi
-		case "$choice" in
-			1) INSTALL_DIR="$opt_dir" ;;
-			2) INSTALL_DIR="$cur_dir" ;;
-			3)
-				echo -n "Введите путь: " >&2
-				read -r input || true
-				if [[ -n "$input" ]]; then
-					INSTALL_DIR="$input"
-				fi
-				;;
-			*) INSTALL_DIR="$opt_dir" ;;
-		esac
 	fi
 }
 
@@ -313,7 +296,7 @@ ensure_install_templates() {
 	[[ $have_all -eq 1 ]] && return 0
 
 	if [[ -t 0 ]]; then
-		warn "Шаблоны не найдены в ${REPO_ROOT}/install/ (скрипт запущен не из корня репозитория). Далее можно скачать с GitHub и выбрать каталог: временный, текущий (./.mtpanel-templates) или свой путь."
+		warn "Шаблоны не найдены в ${REPO_ROOT}/install/. Скачать с GitHub в ${DEFAULT_TEMPLATES_CACHE}?"
 		echo -n "Скачать шаблоны с GitHub (GrandMax/telemt-panel)? (Y/n): " >&2
 		read -r ans || true
 		ans_lower=$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')
@@ -324,35 +307,8 @@ ensure_install_templates() {
 		info "Шаблоны не найдены. Пытаюсь скачать с GitHub..."
 	fi
 
-	local cache
-	if [[ -n "${TEMPLATES_CACHE_DIR:-}" ]]; then
-		cache="${TEMPLATES_CACHE_DIR}"
-	elif [[ -t 0 ]]; then
-		echo ""
-		echo -n "Куда скачать шаблоны? [1] Временный каталог [2] Текущий каталог (./.mtpanel-templates) [3] Указать путь (например /opt/mtpanel-templates) [1]: " >&2
-		read -r choice || true
-		choice="${choice:-1}"
-		choice="$(printf '%s' "$choice" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-		if [[ "$choice" == "2" ]]; then
-			cache="$(pwd)/.mtpanel-templates"
-		elif [[ "$choice" == "3" ]]; then
-			echo -n "Введите каталог для шаблонов: " >&2
-			read -r cache || true
-			cache="$(printf '%s' "$cache" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-			[[ -z "$cache" ]] && err "Каталог не указан."
-			# относительный путь — от текущего каталога
-			[[ "$cache" != /* ]] && cache="$(pwd)/${cache}"
-		elif [[ -n "$choice" ]] && [[ "$choice" != "1" ]]; then
-			# введён путь напрямую (например /opt/mtpanel-templates)
-			cache="$choice"
-			[[ "$cache" != /* ]] && cache="$(pwd)/${cache}"
-		else
-			cache="$(mktemp -d)"
-			info "Шаблоны будут загружены во временный каталог."
-		fi
-	else
-		cache="$(mktemp -d)"
-	fi
+	local cache="${TEMPLATES_CACHE_DIR:-$DEFAULT_TEMPLATES_CACHE}"
+	info "Шаблоны будут загружены в ${cache}"
 	mkdir -p "${cache}/install"
 	for f in $required; do
 		if ! curl -sSL -o "${cache}/install/${f}" "${TELEMT_INSTALL_BASE_URL}/${f}"; then
@@ -378,6 +334,16 @@ copy_and_configure() {
 			cp "${REPO_ROOT}/install/docker-compose.panel.yml" "${INSTALL_DIR}/docker-compose.yml"
 		fi
 		PANEL_SECRET_KEY=$(openssl rand -hex 32)
+		# Initial telemt config and secret (same as proxy-only); will be copied into volume before telemt starts
+		SECRET=$(generate_secret)
+		cp "${REPO_ROOT}/install/telemt.toml.example" "${INSTALL_DIR}/telemt.toml.example"
+		sed -e "s/ПОДСТАВЬТЕ_32_СИМВОЛА_HEX/${SECRET}/g" \
+		    -e "s/tls_domain = \"pikabu.ru\"/tls_domain = \"${FAKE_DOMAIN}\"/g" \
+		    -e "s/TELEMT_PORT_PLACEHOLDER/${TELEMT_INTERNAL_PORT}/g" \
+		    "${INSTALL_DIR}/telemt.toml.example" > "${INSTALL_DIR}/telemt.toml"
+		rm -f "${INSTALL_DIR}/telemt.toml.example"
+		printf '%s' "$SECRET" > "${INSTALL_DIR}/.secret"
+		info "Создан ${INSTALL_DIR}/telemt.toml (домен маскировки: ${FAKE_DOMAIN})"
 		# .env for panel mode
 		{
 			echo "REPO_ROOT=${REPO_ROOT}"
@@ -470,6 +436,12 @@ run_compose() {
 		else
 			info "Сборка образов telemt и panel..."
 			docker compose build --no-cache 2>/dev/null || docker compose build
+		fi
+		# Start traefik and panel first so shared volume exists, then copy initial config for telemt
+		docker compose up -d traefik panel
+		info "Копирую начальный конфиг прокси в volume для telemt..."
+		if ! docker compose run --rm -v "${INSTALL_DIR}/telemt.toml:/src/telemt.toml:ro" panel sh -c "cp /src/telemt.toml /app/telemt-config/config.toml"; then
+			err "Не удалось скопировать telemt.toml в volume. Проверьте: ${INSTALL_DIR}/telemt.toml и логи панели."
 		fi
 		docker compose up -d
 		info "Ожидание готовности панели..."
@@ -784,7 +756,7 @@ is_valid_install_dir() {
 # Usage: dir=$(prompt_install_dir_existing)  # interactive
 # Or: dir=$(prompt_install_dir_existing "/path/default" "offer")  # on dir missing, offer new install (returns INSTALL:<path> if user agrees)
 prompt_install_dir_existing() {
-	local default="${1:-/opt/mtpanel-data}"
+	local default="${1:-$DEFAULT_INSTALL_DIR}"
 	local offer_install="${2:-}"
 	default="$(resolve_install_dir "$default")"
 	if [[ -t 0 ]]; then
