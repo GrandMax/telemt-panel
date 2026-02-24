@@ -16,6 +16,8 @@ temp
 # Python / panel backend
 __pycache__/
 **/__pycache__/
+.venv/
+**/.venv/
 panel/backend/panel.db
 
 # Scripts (local/temporary)

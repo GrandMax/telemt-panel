@@ -461,18 +461,13 @@ run_compose() {
 			info "Сборка образов telemt и panel..."
 			docker compose build --no-cache 2>/dev/null || docker compose build
 		fi
-		# Start traefik and panel first so shared volume exists, then copy initial config for telemt
-		set +e
-		up_out=$(docker compose up -d traefik panel 2>&1); up_rc=$?
-		set -e
-		if [[ $up_rc -ne 0 ]]; then
-			warn "Вывод: $up_out"
-			err "Не удалось запустить traefik и panel. Проверьте docker compose в каталоге ${INSTALL_DIR}."
-		fi
+		# Copy config into shared volume before 'up'. Panel has no depends_on telemt (only telemt depends_on panel),
+		# so 'run panel' does not wait for telemt; volume is created by this run.
 		info "Копирую начальный конфиг прокси в volume для telemt..."
 		if ! docker compose run --rm -v "${INSTALL_DIR}/telemt.toml:/src/telemt.toml:ro" panel sh -c "cp /src/telemt.toml /app/telemt-config/config.toml"; then
 			err "Не удалось скопировать telemt.toml в volume. Проверьте: ${INSTALL_DIR}/telemt.toml и логи панели."
 		fi
+		info "Запускаю контейнеры..."
 		set +e
 		up_out=$(docker compose up -d 2>&1); up_rc=$?
 		set -e
