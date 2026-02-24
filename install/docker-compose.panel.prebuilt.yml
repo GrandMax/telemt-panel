@@ -77,7 +77,7 @@ services:
       - SECRET_KEY=${PANEL_SECRET_KEY}
       - PROXY_HOST=${PROXY_HOST:-localhost}
       - PROXY_PORT=${LISTEN_PORT:-443}
-      - TLS_DOMAIN=${FAKE_DOMAIN:-example.com}
+      - TLS_DOMAIN=${FAKE_DOMAIN:-pikabu.ru}
       - TELEMT_IGNORE_TIME_SKEW=${TELEMT_IGNORE_TIME_SKEW:-false}
     networks:
       - mtpanel

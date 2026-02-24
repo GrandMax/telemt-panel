@@ -971,7 +971,7 @@ cmd_add_panel() {
 
 	# Backup and read current settings
 	local fake_domain list_port img_source
-	fake_domain=$(grep -E '^\s*tls_domain\s*=' "${dir}/telemt.toml" 2>/dev/null | sed -E 's/^[^=]*=\s*["]?([^"]+)["]?.*/\1/' | tr -d ' \r' || echo "example.com")
+	fake_domain=$(grep -E '^\s*tls_domain\s*=' "${dir}/telemt.toml" 2>/dev/null | sed -E 's/^[^=]*=\s*["]?([^"]+)["]?.*/\1/' | tr -d ' \r' || echo "pikabu.ru")
 	list_port=$(grep -E '^LISTEN_PORT=' "${dir}/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r' || echo "443")
 	img_source=$(grep -E '^TELEMT_IMAGE_SOURCE=' "${dir}/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r' || echo "build")
 	cp "${dir}/telemt.toml" "${dir}/telemt.toml.bak" 2>/dev/null || true
