@@ -6,6 +6,9 @@ services:
     image: traefik:v3.6
     container_name: mtpanel-traefik
     restart: unless-stopped
+    depends_on:
+      telemt:
+        condition: service_healthy
     command:
       - "--api.dashboard=false"
       - "--entrypoints.websecure.address=:443"
@@ -32,6 +35,12 @@ services:
       - telemt-config:/app/config:ro
     networks:
       - mtpanel
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/metrics"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
     depends_on:
       panel:
         condition: service_healthy

@@ -1,7 +1,12 @@
 # Template: SNI_DOMAIN_PLACEHOLDER and TELEMT_PORT_PLACEHOLDER are replaced by install.sh.
 # Domain here must match censorship.tls_domain in telemt.toml.
+# PROXY protocol v2 is sent to telemt via serversTransport so telemt sees real client IP.
 
 tcp:
+  serversTransports:
+    mtpanel-transport:
+      proxyProtocol:
+        version: 2
   routers:
     mtpanel:
       rule: "HostSNI(`SNI_DOMAIN_PLACEHOLDER`)"
@@ -13,7 +18,6 @@ tcp:
   services:
     mtpanel:
       loadBalancer:
+        serversTransport: mtpanel-transport
         servers:
           - address: "telemt:TELEMT_PORT_PLACEHOLDER"
-            proxyProtocol:
-              version: 2

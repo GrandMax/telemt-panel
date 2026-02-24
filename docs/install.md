@@ -90,11 +90,7 @@ INSTALL_DIR=/opt/mtpanel FAKE_DOMAIN=sberbank.ru ./install.sh install
 
 1. В `telemt.toml` в секции `[server]` добавьте строку:  
    `proxy_protocol = true`
-2. В `traefik/dynamic/tcp.yml` у сервиса `mtpanel` в `loadBalancer.servers` у единственного элемента `- address: "telemt:1234"` добавьте под ним:
-   ```yaml
-   proxyProtocol:
-     version: 2
-   ```
+2. В `traefik/dynamic/tcp.yml` добавьте секцию `tcp.serversTransports` с PROXY v2 и у сервиса `mtpanel` в `loadBalancer` укажите `serversTransport` (см. актуальный шаблон в репозитории `install/traefik-dynamic-tcp.yml`), либо замените весь файл из шаблона и подставьте домен и порт.
 3. Перезапустите контейнеры:  
    `docker compose up -d --force-recreate`
 
