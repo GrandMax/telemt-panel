@@ -292,9 +292,13 @@ function UserRow({
   const deleteUserMutation = useDeleteUser();
   const regenerateSecret = useRegenerateSecret();
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast({ title: "Copied to clipboard", status: "success", duration: 1500 });
+  const handleCopy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ title: "Copied to clipboard", status: "success", duration: 1500 });
+    } catch {
+      toast({ title: "Copy failed", status: "error", duration: 2000 });
+    }
   };
 
   return (
@@ -418,7 +422,7 @@ function LinksModal({
               <FormControl mb={3}>
                 <FormLabel>tg:// link</FormLabel>
                 <InputGroup>
-                  <Input value={tg} readOnly />
+                  <Input value={tg} readOnly pr="5rem" />
                   <InputRightElement width="4rem">
                     <Button size="sm" onClick={() => onCopy(tg)}>
                       Copy
@@ -429,7 +433,7 @@ function LinksModal({
               <FormControl mb={3}>
                 <FormLabel>https://t.me link</FormLabel>
                 <InputGroup>
-                  <Input value={https} readOnly />
+                  <Input value={https} readOnly pr="5rem" />
                   <InputRightElement width="4rem">
                     <Button size="sm" onClick={() => onCopy(https)}>
                       Copy

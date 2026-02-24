@@ -281,6 +281,20 @@ generate_secret() {
 	openssl rand -hex 16
 }
 
+# Detect public IPv4 for PROXY_HOST / panel links. Outputs IP or YOUR_SERVER_IP on failure.
+detect_public_ip4() {
+	local raw url
+	for url in https://ifconfig.me/ip https://icanhazip.com https://api.ipify.org https://checkip.amazonaws.com; do
+		raw=$(curl -4 -s --connect-timeout 3 "$url" 2>/dev/null | tr -d '\n\r')
+		if [[ -n "$raw" ]] && [[ ! "$raw" =~ [[:space:]] ]] && [[ "$raw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+			echo "$raw"
+			return 0
+		fi
+	done
+	echo "YOUR_SERVER_IP"
+	return 1
+}
+
 TELEMT_INSTALL_BASE_URL="${TELEMT_INSTALL_BASE_URL:-https://raw.githubusercontent.com/GrandMax/telemt-panel/main/install}"
 
 ensure_install_templates() {
@@ -367,14 +381,19 @@ copy_and_configure() {
 		rm -f "${INSTALL_DIR}/telemt.toml.example"
 		printf '%s' "$SECRET" > "${INSTALL_DIR}/.secret"
 		info "Создан ${INSTALL_DIR}/telemt.toml (домен маскировки: ${FAKE_DOMAIN})"
-		# .env for panel mode
+		# .env for panel mode; PROXY_HOST for panel links (tg://proxy server=)
+		local proxy_host_val="${PROXY_HOST:-}"
+		if [[ -z "$proxy_host_val" ]]; then
+			proxy_host_val=$(detect_public_ip4)
+			[[ "$proxy_host_val" == "YOUR_SERVER_IP" ]] && warn "Не удалось определить внешний IP для ссылок панели. Задайте PROXY_HOST вручную в .env при необходимости."
+		fi
 		{
 			echo "REPO_ROOT=${REPO_ROOT}"
 			echo "LISTEN_PORT=${LISTEN_PORT}"
 			echo "TELEMT_IMAGE_SOURCE=${TELEMT_IMAGE_SOURCE}"
 			echo "PANEL_SECRET_KEY=${PANEL_SECRET_KEY}"
 			echo "PANEL_PORT=${PANEL_PORT:-8080}"
-			echo "PROXY_HOST=${PROXY_HOST:-localhost}"
+			echo "PROXY_HOST=${proxy_host_val}"
 			echo "FAKE_DOMAIN=${FAKE_DOMAIN}"
 		} > "${INSTALL_DIR}/.env"
 		info "Режим «прокси + панель». Конфиг прокси будет в volume, панель на порту ${PANEL_PORT:-8080}."
@@ -510,13 +529,41 @@ print_link() {
 	[[ -f "${INSTALL_DIR}/.env" ]] && source "${INSTALL_DIR}/.env" 2>/dev/null || true
 	if [[ "${INSTALL_PANEL:-no}" == "yes" ]]; then
 		local port="${PANEL_PORT:-8080}"
-		local panel_url="http://localhost:${port}"
+		local SERVER_IP4 SERVER_IP6 raw url
+		SERVER_IP4=""
+		for url in https://ifconfig.me/ip https://icanhazip.com https://api.ipify.org https://checkip.amazonaws.com; do
+			raw=$(curl -4 -s --connect-timeout 3 "$url" 2>/dev/null | tr -d '\n\r')
+			if [[ -n "$raw" ]] && [[ ! "$raw" =~ [[:space:]] ]] && [[ "$raw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+				SERVER_IP4="$raw"
+				break
+			fi
+		done
+		SERVER_IP6=""
+		for url in https://ifconfig.me/ip https://icanhazip.com https://api.ipify.org https://api64.ipify.org; do
+			raw=$(curl -6 -s --connect-timeout 3 "$url" 2>/dev/null | tr -d '\n\r')
+			if [[ -n "$raw" ]] && [[ ! "$raw" =~ [[:space:]] ]] && [[ "$raw" =~ : ]] && [[ "$raw" =~ ^[0-9a-fA-F:.]+$ ]]; then
+				SERVER_IP6="$raw"
+				break
+			fi
+		done
+		if [[ -z "$SERVER_IP4" ]] && [[ -z "$SERVER_IP6" ]]; then
+			SERVER_IP4="YOUR_SERVER_IP"
+			warn "Не удалось определить внешний IP. Подставьте IP сервера в URL панели вручную."
+		fi
 		echo ""
 		echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
 		echo -e "${GREEN}║  Панель управления MTProxy                             ║${NC}"
 		echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
 		echo ""
-		echo -e "  URL:   ${GREEN}${panel_url}${NC}"
+		if [[ -n "$SERVER_IP4" ]] && [[ "$SERVER_IP4" != "YOUR_SERVER_IP" ]]; then
+			echo -e "  URL:   ${GREEN}http://${SERVER_IP4}:${port}${NC}"
+		fi
+		if [[ -n "$SERVER_IP6" ]]; then
+			echo -e "  URL:   ${GREEN}http://[${SERVER_IP6}]:${port}${NC}"
+		fi
+		if [[ "$SERVER_IP4" == "YOUR_SERVER_IP" ]]; then
+			echo -e "  URL:   ${GREEN}http://${SERVER_IP4}:${port}${NC}  (замените на IP или домен сервера)"
+		fi
 		if [[ -n "${PANEL_CREATED_USER:-}" ]]; then
 			echo -e "  Логин: ${GREEN}${PANEL_CREATED_USER}${NC}"
 			echo -e "  Пароль: ${GREEN}${PANEL_CREATED_PASS}${NC}"
@@ -925,13 +972,18 @@ cmd_add_panel() {
 		cp "${TEMPLATES_DIR}/docker-compose.panel.yml" "${dir}/docker-compose.yml"
 	fi
 	PANEL_SECRET_KEY=$(openssl rand -hex 32)
+	local proxy_host_val="${PROXY_HOST:-}"
+	if [[ -z "$proxy_host_val" ]]; then
+		proxy_host_val=$(detect_public_ip4)
+		[[ "$proxy_host_val" == "YOUR_SERVER_IP" ]] && warn "Не удалось определить внешний IP для ссылок панели. Задайте PROXY_HOST вручную в .env при необходимости."
+	fi
 	{
 		echo "REPO_ROOT=${REPO_ROOT}"
 		echo "LISTEN_PORT=${list_port}"
 		echo "TELEMT_IMAGE_SOURCE=${img_source}"
 		echo "PANEL_SECRET_KEY=${PANEL_SECRET_KEY}"
 		echo "PANEL_PORT=${PANEL_PORT:-8080}"
-		echo "PROXY_HOST=${PROXY_HOST:-localhost}"
+		echo "PROXY_HOST=${proxy_host_val}"
 		echo "FAKE_DOMAIN=${fake_domain}"
 	} > "${dir}/.env"
 
