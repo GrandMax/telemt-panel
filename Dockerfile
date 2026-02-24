@@ -24,7 +24,6 @@ RUN useradd -r -s /usr/sbin/nologin telemt
 WORKDIR /app
 
 COPY --from=builder /build/target/release/telemt /app/telemt
-COPY config.toml /app/config.toml
 
 RUN chown -R telemt:telemt /app
 USER telemt
