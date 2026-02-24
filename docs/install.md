@@ -87,10 +87,10 @@ INSTALL_DIR=/opt/mtpannel FAKE_DOMAIN=sberbank.ru ./install.sh install
 1. Выполните вход в реестр: `docker login` (для Docker Hub — учётная запись grandmax).
 2. Из корня репозитория запустите:
    ```bash
-   ./scripts/build-docker-release.sh
+   DOCKERHUB_USERNAME=grandmax DOCKERHUB_TOKEN=ваш_токен ./scripts/docker-build-push.sh
    ```
-   Скрипт соберёт образ из `Dockerfile`, протегирует его как `grandmax/telemt:latest` и `grandmax/telemt:<версия>` (версия из `Cargo.toml`) и отправит образ в реестр.
-3. Только локальная сборка без отправки: `./scripts/build-docker-release.sh --no-push`.
+   Скрипт соберёт образы из `Dockerfile` и `panel/Dockerfile`, протегирует их как `grandmax/telemt:latest`, `grandmax/telemt-panel:latest` и с тегом версии из `Cargo.toml`, затем отправит в реестр. Подробнее: [docs/builddocker.md](docs/builddocker.md).
+3. Только локальная сборка без отправки: выполните `docker build` вручную (см. [docs/builddocker.md](docs/builddocker.md)).
 
 **Сборка в GitHub Actions:** workflow «Docker build and push» запускается только вручную (Actions → Docker build and push → Run workflow). В настройках репозитория (Settings → Secrets and variables → Actions) добавьте секреты: `DOCKERHUB_USERNAME` (логин Docker Hub) и `DOCKERHUB_TOKEN` (Access Token из [Docker Hub → Security](https://hub.docker.com/settings/security)).
 
