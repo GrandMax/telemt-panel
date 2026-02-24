@@ -313,8 +313,8 @@ ensure_install_templates() {
 	[[ $have_all -eq 1 ]] && return 0
 
 	if [[ -t 0 ]]; then
-		warn "Шаблоны не найдены в ${REPO_ROOT}/install/."
-		echo -n "Скачать с GitHub (GrandMax/telemt-panel)? (Y/n): " >&2
+		warn "Шаблоны не найдены в ${REPO_ROOT}/install/ (скрипт запущен не из корня репозитория). Далее можно скачать с GitHub и выбрать каталог: временный, текущий (./.mtpanel-templates) или свой путь."
+		echo -n "Скачать шаблоны с GitHub (GrandMax/telemt-panel)? (Y/n): " >&2
 		read -r ans || true
 		ans_lower=$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')
 		if [[ "$ans_lower" == "n" ]] || [[ "$ans_lower" == "no" ]]; then
@@ -461,7 +461,9 @@ run_compose() {
 	if [[ "${INSTALL_PANEL:-no}" == "yes" ]]; then
 		if [[ "${TELEMT_IMAGE_SOURCE}" == "prebuilt" ]]; then
 			info "Загрузка образов telemt и panel из Docker Hub..."
+			set +e
 			pull_out=$(docker compose --progress plain pull 2>&1); pull_rc=$?
+			set -e
 			if [[ $pull_rc -ne 0 ]]; then
 				echo ""
 				warn "Вывод docker compose pull:"
@@ -487,7 +489,9 @@ run_compose() {
 	else
 		if [[ "${TELEMT_IMAGE_SOURCE}" == "prebuilt" ]]; then
 			info "Загрузка образа telemt и запуск контейнеров..."
+			set +e
 			pull_out=$(docker compose --progress plain pull 2>&1); pull_rc=$?
+			set -e
 			if [[ $pull_rc -ne 0 ]]; then
 				echo ""
 				warn "Вывод docker compose pull:"
