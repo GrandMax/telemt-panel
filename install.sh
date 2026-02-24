@@ -461,8 +461,15 @@ run_compose() {
 	if [[ "${INSTALL_PANEL:-no}" == "yes" ]]; then
 		if [[ "${TELEMT_IMAGE_SOURCE}" == "prebuilt" ]]; then
 			info "Загрузка образов telemt и panel из Docker Hub..."
-			if ! docker compose --progress plain pull; then
-				err "Не удалось загрузить образы. Убедитесь, что grandmax/telemt:latest и grandmax/telemt-panel:latest опубликованы на Docker Hub и доступны (docker login при необходимости)."
+			pull_out=$(docker compose --progress plain pull 2>&1); pull_rc=$?
+			if [[ $pull_rc -ne 0 ]]; then
+				echo ""
+				warn "Вывод docker compose pull:"
+				echo "$pull_out" | sed 's/^/  /'
+				info "Проверка прямой загрузки образов (для диагностики):"
+				(docker pull grandmax/telemt:latest 2>&1 | sed 's/^/  /') || true
+				(docker pull grandmax/telemt-panel:latest 2>&1 | sed 's/^/  /') || true
+				err "Не удалось загрузить образы. Выше — вывод compose и прямой pull. Частые причины: нет тега latest, другая платформа (только linux/amd64)."
 			fi
 		else
 			info "Сборка образов telemt и panel..."
@@ -480,8 +487,14 @@ run_compose() {
 	else
 		if [[ "${TELEMT_IMAGE_SOURCE}" == "prebuilt" ]]; then
 			info "Загрузка образа telemt и запуск контейнеров..."
-			if ! docker compose --progress plain pull; then
-				err "Не удалось загрузить образ. Убедитесь, что grandmax/telemt:latest опубликован на Docker Hub (docker login при необходимости)."
+			pull_out=$(docker compose --progress plain pull 2>&1); pull_rc=$?
+			if [[ $pull_rc -ne 0 ]]; then
+				echo ""
+				warn "Вывод docker compose pull:"
+				echo "$pull_out" | sed 's/^/  /'
+				info "Проверка прямой загрузки (для диагностики):"
+				(docker pull grandmax/telemt:latest 2>&1 | sed 's/^/  /') || true
+				err "Не удалось загрузить образ. Выше — вывод compose и прямой pull. Образ собирается только для linux/amd64."
 			fi
 			docker compose up -d
 		else
