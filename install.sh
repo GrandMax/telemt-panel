@@ -289,15 +289,15 @@ ensure_install_templates() {
 	local have_all=1
 	local f
 
-	# Сначала проверяем кэш в домашнем каталоге (куда и скачиваем)
+	# Сначала проверяем кэш (шаблоны в корне кэша, без install/)
 	for f in $required; do
-		if [[ ! -f "${cache}/install/${f}" ]]; then
+		if [[ ! -f "${cache}/${f}" ]]; then
 			have_all=0
 			break
 		fi
 	done
 	if [[ $have_all -eq 1 ]]; then
-		REPO_ROOT="$cache"
+		TEMPLATES_DIR="$cache"
 		return 0
 	fi
 
@@ -309,11 +309,14 @@ ensure_install_templates() {
 			break
 		fi
 	done
-	[[ $have_all -eq 1 ]] && return 0
+	if [[ $have_all -eq 1 ]]; then
+		TEMPLATES_DIR="${REPO_ROOT}/install"
+		return 0
+	fi
 
 	# Шаблонов нет ни в кэше, ни рядом со скриптом — скачиваем в кэш
 	if [[ -t 0 ]]; then
-		warn "Шаблоны не найдены в ${cache}/install/. Скачать с GitHub в этот каталог?"
+		warn "Шаблоны не найдены в ${cache}. Скачать с GitHub в этот каталог?"
 		echo -n "Скачать шаблоны с GitHub (GrandMax/telemt-panel)? (Y/n): " >&2
 		read -r ans || true
 		ans_lower=$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')
@@ -324,19 +327,24 @@ ensure_install_templates() {
 		info "Шаблоны не найдены. Пытаюсь скачать с GitHub в ${cache}..."
 	fi
 
-	mkdir -p "${cache}/install"
+	mkdir -p "${cache}"
 	for f in $required; do
-		if ! curl -sSL -o "${cache}/install/${f}" "${TELEMT_INSTALL_BASE_URL}/${f}"; then
-			err "Не удалось скачать шаблон: ${f}"
+		if ! curl -fsSL -o "${cache}/${f}" "${TELEMT_INSTALL_BASE_URL}/${f}"; then
+			err "Не удалось скачать шаблон: ${f}. Проверьте доступ к GitHub или задайте TELEMT_INSTALL_BASE_URL / запустите скрипт из корня репозитория (с каталогом install/)."
+		fi
+		# Не использовать тело 404/ошибки как шаблон
+		if head -1 "${cache}/${f}" | grep -qE '^(404|<!DOCTYPE|<!doctype)'; then
+			rm -f "${cache}/${f}"
+			err "Сервер вернул страницу ошибки вместо шаблона: ${f}. Задайте TELEMT_INSTALL_BASE_URL или запустите скрипт из корня репозитория."
 		fi
 	done
-	REPO_ROOT="$cache"
-	info "Шаблоны загружены в ${REPO_ROOT}/install/"
+	TEMPLATES_DIR="$cache"
+	info "Шаблоны загружены в ${TEMPLATES_DIR}"
 }
 
 copy_and_configure() {
 	ensure_install_templates
-	info "Создаю каталоги и копирую шаблоны из ${REPO_ROOT}/install/ ..."
+	info "Создаю каталоги и копирую шаблоны из ${TEMPLATES_DIR}/ ..."
 	mkdir -p "${INSTALL_DIR}"
 	mkdir -p "${INSTALL_DIR}/traefik/dynamic" "${INSTALL_DIR}/traefik/static"
 
@@ -344,14 +352,14 @@ copy_and_configure() {
 		if [[ "$TELEMT_IMAGE_SOURCE" == "prebuilt" ]]; then
 			sed -e "s|image: grandmax/telemt:latest|image: ${TELEMT_PREBUILT_IMAGE}|g" \
 			    -e "s|image: grandmax/telemt-panel:latest|image: ${PANEL_PREBUILT_IMAGE}|g" \
-			    "${REPO_ROOT}/install/docker-compose.panel.prebuilt.yml" > "${INSTALL_DIR}/docker-compose.yml"
+			    "${TEMPLATES_DIR}/docker-compose.panel.prebuilt.yml" > "${INSTALL_DIR}/docker-compose.yml"
 		else
-			cp "${REPO_ROOT}/install/docker-compose.panel.yml" "${INSTALL_DIR}/docker-compose.yml"
+			cp "${TEMPLATES_DIR}/docker-compose.panel.yml" "${INSTALL_DIR}/docker-compose.yml"
 		fi
 		PANEL_SECRET_KEY=$(openssl rand -hex 32)
 		# Initial telemt config and secret (same as proxy-only); will be copied into volume before telemt starts
 		SECRET=$(generate_secret)
-		cp "${REPO_ROOT}/install/telemt.toml.example" "${INSTALL_DIR}/telemt.toml.example"
+		cp "${TEMPLATES_DIR}/telemt.toml.example" "${INSTALL_DIR}/telemt.toml.example"
 		sed -e "s/ПОДСТАВЬТЕ_32_СИМВОЛА_HEX/${SECRET}/g" \
 		    -e "s/tls_domain = \"pikabu.ru\"/tls_domain = \"${FAKE_DOMAIN}\"/g" \
 		    -e "s/TELEMT_PORT_PLACEHOLDER/${TELEMT_INTERNAL_PORT}/g" \
@@ -373,11 +381,11 @@ copy_and_configure() {
 	else
 		if [[ "$TELEMT_IMAGE_SOURCE" == "prebuilt" ]]; then
 			sed -e "s|image: grandmax/telemt:latest|image: ${TELEMT_PREBUILT_IMAGE}|g" \
-				"${REPO_ROOT}/install/docker-compose.prebuilt.yml" > "${INSTALL_DIR}/docker-compose.yml"
+				"${TEMPLATES_DIR}/docker-compose.prebuilt.yml" > "${INSTALL_DIR}/docker-compose.yml"
 		else
-			cp "${REPO_ROOT}/install/docker-compose.yml" "${INSTALL_DIR}/docker-compose.yml"
+			cp "${TEMPLATES_DIR}/docker-compose.yml" "${INSTALL_DIR}/docker-compose.yml"
 		fi
-		cp "${REPO_ROOT}/install/telemt.toml.example" "${INSTALL_DIR}/telemt.toml.example"
+		cp "${TEMPLATES_DIR}/telemt.toml.example" "${INSTALL_DIR}/telemt.toml.example"
 		SECRET=$(generate_secret)
 		sed -e "s/ПОДСТАВЬТЕ_32_СИМВОЛА_HEX/${SECRET}/g" \
 		    -e "s/tls_domain = \"pikabu.ru\"/tls_domain = \"${FAKE_DOMAIN}\"/g" \
@@ -395,7 +403,7 @@ copy_and_configure() {
 
 	sed -e "s/SNI_DOMAIN_PLACEHOLDER/${FAKE_DOMAIN}/g" \
 	    -e "s/TELEMT_PORT_PLACEHOLDER/${TELEMT_INTERNAL_PORT}/g" \
-	    "${REPO_ROOT}/install/traefik-dynamic-tcp.yml" > "${INSTALL_DIR}/traefik/dynamic/tcp.yml"
+	    "${TEMPLATES_DIR}/traefik-dynamic-tcp.yml" > "${INSTALL_DIR}/traefik/dynamic/tcp.yml"
 	info "Настроен Traefik: SNI ${FAKE_DOMAIN} -> telemt:${TELEMT_INTERNAL_PORT} (TLS passthrough)"
 }
 
@@ -627,9 +635,9 @@ cmd_install() {
 	ensure_install_templates
 
 	if [[ "$INSTALL_PANEL" == "yes" ]]; then
-		if [[ "$TELEMT_IMAGE_SOURCE" == "prebuilt" ]] && [[ ! -f "${REPO_ROOT}/install/docker-compose.panel.prebuilt.yml" ]]; then
+		if [[ "$TELEMT_IMAGE_SOURCE" == "prebuilt" ]] && [[ ! -f "${TEMPLATES_DIR}/docker-compose.panel.prebuilt.yml" ]]; then
 			err "Режим «прокси + панель (prebuilt)» требует файл install/docker-compose.panel.prebuilt.yml. Запускайте из корня репозитория telemt."
-		elif [[ "$TELEMT_IMAGE_SOURCE" == "build" ]] && [[ ! -f "${REPO_ROOT}/install/docker-compose.panel.yml" ]]; then
+		elif [[ "$TELEMT_IMAGE_SOURCE" == "build" ]] && [[ ! -f "${TEMPLATES_DIR}/docker-compose.panel.yml" ]]; then
 			err "Режим «прокси + панель (build)» требует файл install/docker-compose.panel.yml. Запускайте из корня репозитория telemt."
 		fi
 	fi
@@ -747,7 +755,7 @@ cmd_update() {
 			ensure_install_templates
 			sed -e "s|image: grandmax/telemt:latest|image: ${TELEMT_PREBUILT_IMAGE:-grandmax/telemt:latest}|g" \
 			    -e "s|image: grandmax/telemt-panel:latest|image: ${PANEL_PREBUILT_IMAGE:-grandmax/telemt-panel:latest}|g" \
-			    "${REPO_ROOT}/install/docker-compose.panel.prebuilt.yml" > "${dir}/docker-compose.yml"
+			    "${TEMPLATES_DIR}/docker-compose.panel.prebuilt.yml" > "${dir}/docker-compose.yml"
 			info "Режим «прокси + панель»: скачиваю образы (pull)..."
 			docker pull "${TELEMT_PREBUILT_IMAGE:-grandmax/telemt:latest}" && docker pull "${PANEL_PREBUILT_IMAGE:-grandmax/telemt-panel:latest}" || err "Не удалось загрузить образы."
 			docker pull traefik:v3.6 || true
@@ -766,7 +774,7 @@ cmd_update() {
 	elif [[ "$img_source" == "prebuilt" ]]; then
 		ensure_install_templates
 		sed -e "s|image: grandmax/telemt:latest|image: ${TELEMT_PREBUILT_IMAGE:-grandmax/telemt:latest}|g" \
-		    "${REPO_ROOT}/install/docker-compose.prebuilt.yml" > "${dir}/docker-compose.yml"
+		    "${TEMPLATES_DIR}/docker-compose.prebuilt.yml" > "${dir}/docker-compose.yml"
 		info "Скачиваю образ (pull)..."
 		docker pull "${TELEMT_PREBUILT_IMAGE:-grandmax/telemt:latest}" || err "Не удалось загрузить образ."
 		docker pull traefik:v3.6 || true
@@ -910,15 +918,16 @@ cmd_add_panel() {
 	(cd "$dir" && docker compose down) || true
 
 	info "Подключаю панель и обновляю .env..."
+	ensure_install_templates
 	if [[ "$img_source" == "prebuilt" ]]; then
 		sed -e "s|image: grandmax/telemt:latest|image: ${TELEMT_PREBUILT_IMAGE}|g" \
 		    -e "s|image: grandmax/telemt-panel:latest|image: ${PANEL_PREBUILT_IMAGE}|g" \
-		    "${REPO_ROOT}/install/docker-compose.panel.prebuilt.yml" > "${dir}/docker-compose.yml"
+		    "${TEMPLATES_DIR}/docker-compose.panel.prebuilt.yml" > "${dir}/docker-compose.yml"
 	else
-		if [[ ! -f "${REPO_ROOT}/install/docker-compose.panel.yml" ]]; then
+		if [[ ! -f "${TEMPLATES_DIR}/docker-compose.panel.yml" ]]; then
 			err "Файл install/docker-compose.panel.yml не найден. Запускайте из корня репозитория telemt."
 		fi
-		cp "${REPO_ROOT}/install/docker-compose.panel.yml" "${dir}/docker-compose.yml"
+		cp "${TEMPLATES_DIR}/docker-compose.panel.yml" "${dir}/docker-compose.yml"
 	fi
 	PANEL_SECRET_KEY=$(openssl rand -hex 32)
 	{

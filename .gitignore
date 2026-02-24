@@ -13,6 +13,11 @@ tests
 # Local install / docker-compose run dir (e.g. temp from install.sh)
 temp
 
+# Python / panel backend
+__pycache__/
+**/__pycache__/
+panel/backend/panel.db
+
 # Scripts (local/temporary)
 scripts
 
