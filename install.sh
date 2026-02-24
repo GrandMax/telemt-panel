@@ -329,11 +329,23 @@ ensure_install_templates() {
 		cache="${TEMPLATES_CACHE_DIR}"
 	elif [[ -t 0 ]]; then
 		echo ""
-		echo -n "Куда скачать шаблоны? [1] Временный каталог (удалится после установки) [2] Текущий каталог (./.mtpanel-templates) [1]: " >&2
+		echo -n "Куда скачать шаблоны? [1] Временный каталог [2] Текущий каталог (./.mtpanel-templates) [3] Указать путь (например /opt/mtpanel-templates) [1]: " >&2
 		read -r choice || true
 		choice="${choice:-1}"
+		choice="$(printf '%s' "$choice" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 		if [[ "$choice" == "2" ]]; then
 			cache="$(pwd)/.mtpanel-templates"
+		elif [[ "$choice" == "3" ]]; then
+			echo -n "Введите каталог для шаблонов: " >&2
+			read -r cache || true
+			cache="$(printf '%s' "$cache" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+			[[ -z "$cache" ]] && err "Каталог не указан."
+			# относительный путь — от текущего каталога
+			[[ "$cache" != /* ]] && cache="$(pwd)/${cache}"
+		elif [[ -n "$choice" ]] && [[ "$choice" != "1" ]]; then
+			# введён путь напрямую (например /opt/mtpanel-templates)
+			cache="$choice"
+			[[ "$cache" != /* ]] && cache="$(pwd)/${cache}"
 		else
 			cache="$(mktemp -d)"
 			info "Шаблоны будут загружены во временный каталог."
@@ -449,7 +461,9 @@ run_compose() {
 	if [[ "${INSTALL_PANEL:-no}" == "yes" ]]; then
 		if [[ "${TELEMT_IMAGE_SOURCE}" == "prebuilt" ]]; then
 			info "Загрузка образов telemt и panel из Docker Hub..."
-			docker compose --progress plain pull
+			if ! docker compose --progress plain pull; then
+				err "Не удалось загрузить образы. Убедитесь, что grandmax/telemt:latest и grandmax/telemt-panel:latest опубликованы на Docker Hub и доступны (docker login при необходимости)."
+			fi
 		else
 			info "Сборка образов telemt и panel..."
 			docker compose build --no-cache 2>/dev/null || docker compose build
@@ -466,7 +480,9 @@ run_compose() {
 	else
 		if [[ "${TELEMT_IMAGE_SOURCE}" == "prebuilt" ]]; then
 			info "Загрузка образа telemt и запуск контейнеров..."
-			docker compose --progress plain pull
+			if ! docker compose --progress plain pull; then
+				err "Не удалось загрузить образ. Убедитесь, что grandmax/telemt:latest опубликован на Docker Hub (docker login при необходимости)."
+			fi
 			docker compose up -d
 		else
 			info "Сборка образа telemt и запуск контейнеров..."
