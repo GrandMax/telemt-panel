@@ -7,6 +7,12 @@
 - **Telemt** — современный MTProxy (Rust, distroless), поддерживает Fake TLS.
 - **Traefik** — маршрутизация TCP по SNI с TLS passthrough.
 
+## Пример панели
+
+| Dashboard | Proxy-ссылки / QR |
+| --- | --- |
+| ![Dashboard](docs/images/panel-dashboard.png) | ![Proxy links](docs/images/panel-user-links.png) |
+
 ## Установка на сервере (всё с GitHub)
 
 **Рекомендуемый способ** — сначала скачать скрипт, затем запустить (скрипт остаётся в каталоге для меню управления: обновление, смена домена, удаление):

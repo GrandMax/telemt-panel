@@ -62,10 +62,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Set version from Cargo.toml
+      - name: Set version from panel/frontend/package.json
         id: version
         run: |
-          VERSION=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' Cargo.toml | head -n1)
+          VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' panel/frontend/package.json | head -n1)
           [[ -z "$VERSION" ]] && VERSION=unknown
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 

@@ -21,7 +21,7 @@ LISTEN_PORT="${LISTEN_PORT:-443}"
 TELEMT_PREBUILT_IMAGE="${TELEMT_PREBUILT_IMAGE:-grandmax/telemt:latest}"
 TELEMT_IMAGE_SOURCE="${TELEMT_IMAGE_SOURCE:-prebuilt}"
 PANEL_PREBUILT_IMAGE="${PANEL_PREBUILT_IMAGE:-grandmax/telemt-panel:latest}"
-SCRIPT_VERSION="1.0.4"
+SCRIPT_VERSION="1.0.5"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -394,6 +394,7 @@ copy_and_configure() {
 			echo "PANEL_SECRET_KEY=${PANEL_SECRET_KEY}"
 			echo "PANEL_PORT=${PANEL_PORT:-8080}"
 			echo "PROXY_HOST=${proxy_host_val}"
+			echo "TELEMT_IGNORE_TIME_SKEW=${TELEMT_IGNORE_TIME_SKEW:-false}"
 			echo "FAKE_DOMAIN=${FAKE_DOMAIN}"
 		} > "${INSTALL_DIR}/.env"
 		info "Режим «прокси + панель». Конфиг прокси будет в volume, панель на порту ${PANEL_PORT:-8080}."
@@ -726,39 +727,59 @@ cmd_install() {
 	fi
 }
 
-# Check for newer install.sh and replace if running from repo root with write access.
+# Check for newer install.sh and replace (from repo root or standalone install.sh).
 update_scripts_if_newer() {
 	info "Проверка новой версии скрипта в репозитории (SCRIPT_VERSION)..."
-	[[ -d "${REPO_ROOT}/install" ]] || return 0
-	[[ -f "${REPO_ROOT}/install.sh" ]] || return 0
-	[[ -w "${REPO_ROOT}/install.sh" ]] || return 0
-
 	local current="${SCRIPT_VERSION:-}"
 	local remote_ver=""
-	if [[ -d "${REPO_ROOT}/.git" ]]; then
-		(cd "${REPO_ROOT}" && git fetch origin 2>/dev/null) || true
-		remote_ver=$(cd "${REPO_ROOT}" && git show origin/HEAD:install.sh 2>/dev/null | head -25 | grep -E '^SCRIPT_VERSION="' | head -1 | sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p')
+	# Scenario A: run from repo (install/ present and install.sh writable)
+	if [[ -d "${REPO_ROOT}/install" ]] && [[ -f "${REPO_ROOT}/install.sh" ]] && [[ -w "${REPO_ROOT}/install.sh" ]]; then
+		update_dir="${REPO_ROOT}"
+		if [[ -d "${REPO_ROOT}/.git" ]]; then
+			(cd "${REPO_ROOT}" && git fetch origin 2>/dev/null) || true
+			remote_ver=$(cd "${REPO_ROOT}" && git show origin/HEAD:install.sh 2>/dev/null | head -25 | grep -E '^SCRIPT_VERSION="' | head -1 | sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p')
+		fi
+		if [[ -z "$remote_ver" ]]; then
+			remote_ver=$(curl -sL "https://raw.githubusercontent.com/GrandMax/telemt-panel/main/install.sh" 2>/dev/null | head -25 | grep -E '^SCRIPT_VERSION="' | head -1 | sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p')
+		fi
+		if [[ -n "$remote_ver" ]]; then
+			local latest
+			latest=$(printf '%s\n' "$current" "$remote_ver" | sort -V | tail -1)
+			if [[ "$latest" == "$remote_ver" ]] && [[ "$current" != "$remote_ver" ]]; then
+				if [[ -d "${REPO_ROOT}/.git" ]] && (cd "${REPO_ROOT}" && git show origin/HEAD:install.sh &>/dev/null); then
+					(cd "${REPO_ROOT}" && git checkout origin/HEAD -- install.sh 2>/dev/null) && info "Скрипт обновлён до версии ${remote_ver}."
+				else
+					if curl -sL -o "${REPO_ROOT}/install.sh.new" "https://raw.githubusercontent.com/GrandMax/telemt-panel/main/install.sh" 2>/dev/null; then
+						mv "${REPO_ROOT}/install.sh.new" "${REPO_ROOT}/install.sh" && chmod +x "${REPO_ROOT}/install.sh" && info "Скрипт обновлён до версии ${remote_ver}."
+					else
+						warn "Не удалось загрузить новую версию скрипта."
+					fi
+				fi
+			else
+				info "Версия скрипта актуальна (${current})."
+			fi
+		fi
+		return 0
 	fi
-	if [[ -z "$remote_ver" ]]; then
-		remote_ver=$(curl -sL "https://raw.githubusercontent.com/GrandMax/telemt-panel/main/install.sh" 2>/dev/null | head -25 | grep -E '^SCRIPT_VERSION="' | head -1 | sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p')
-	fi
-	[[ -n "$remote_ver" ]] || return 0
 
+	# Scenario B: standalone install.sh (e.g. after curl | bash) — update in script's directory
+	local script_dir
+	script_dir="$(cd "$(dirname "$0")" && pwd)"
+	if [[ "$(basename "$0")" != "install.sh" ]] || [[ ! -w "$script_dir" ]]; then
+		return 0
+	fi
+	remote_ver=$(curl -sL "https://raw.githubusercontent.com/GrandMax/telemt-panel/main/install.sh" 2>/dev/null | head -25 | grep -E '^SCRIPT_VERSION="' | head -1 | sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p')
+	[[ -n "$remote_ver" ]] || return 0
 	local latest
 	latest=$(printf '%s\n' "$current" "$remote_ver" | sort -V | tail -1)
 	if [[ "$latest" != "$remote_ver" ]] || [[ "$current" == "$remote_ver" ]]; then
 		info "Версия скрипта актуальна (${current})."
 		return 0
 	fi
-
-	if [[ -d "${REPO_ROOT}/.git" ]] && (cd "${REPO_ROOT}" && git show origin/HEAD:install.sh &>/dev/null); then
-		(cd "${REPO_ROOT}" && git checkout origin/HEAD -- install.sh 2>/dev/null) && info "Скрипт обновлён до версии ${remote_ver}."
+	if curl -sL -o "${script_dir}/install.sh.new" "https://raw.githubusercontent.com/GrandMax/telemt-panel/main/install.sh" 2>/dev/null; then
+		mv "${script_dir}/install.sh.new" "${script_dir}/install.sh" && chmod +x "${script_dir}/install.sh" && info "Скрипт обновлён до версии ${remote_ver}. При следующем запуске будет использована новая версия."
 	else
-		if curl -sL -o "${REPO_ROOT}/install.sh.new" "https://raw.githubusercontent.com/GrandMax/telemt-panel/main/install.sh" 2>/dev/null; then
-			mv "${REPO_ROOT}/install.sh.new" "${REPO_ROOT}/install.sh" && chmod +x "${REPO_ROOT}/install.sh" && info "Скрипт обновлён до версии ${remote_ver}."
-		else
-			warn "Не удалось загрузить новую версию скрипта."
-		fi
+		warn "Не удалось загрузить новую версию скрипта."
 	fi
 }
 
@@ -984,6 +1005,7 @@ cmd_add_panel() {
 		echo "PANEL_SECRET_KEY=${PANEL_SECRET_KEY}"
 		echo "PANEL_PORT=${PANEL_PORT:-8080}"
 		echo "PROXY_HOST=${proxy_host_val}"
+		echo "TELEMT_IGNORE_TIME_SKEW=${TELEMT_IGNORE_TIME_SKEW:-false}"
 		echo "FAKE_DOMAIN=${fake_domain}"
 	} > "${dir}/.env"
 

@@ -11,6 +11,8 @@ services:
       - "--entrypoints.websecure.address=:443"
       - "--providers.file.directory=/etc/traefik/dynamic"
       - "--providers.file.watch=true"
+      - "--accesslog=true"
+      - "--entrypoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8"
     ports:
       - "${LISTEN_PORT:-443}:443"
     volumes:
@@ -82,6 +84,7 @@ services:
       - PROXY_HOST=${PROXY_HOST:-localhost}
       - PROXY_PORT=${LISTEN_PORT:-443}
       - TLS_DOMAIN=${FAKE_DOMAIN:-example.com}
+      - TELEMT_IGNORE_TIME_SKEW=${TELEMT_IGNORE_TIME_SKEW:-false}
     networks:
       - mtpanel
 

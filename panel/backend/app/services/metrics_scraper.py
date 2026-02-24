@@ -114,10 +114,11 @@ def scrape_and_persist(db: Session, metrics_text: str, last_values: dict[str, tu
         if user.data_limit is not None and user.data_used >= user.data_limit:
             user.status = "limited"
 
+    unique_ips = parsed.get("unique_ips_active", {})
     for username in users_for_ip_update:
         user = db.query(User).filter(User.username == username).first()
         if user:
-            user.active_unique_ips = parsed.get("unique_ips_active", {}).get(username)
+            user.active_unique_ips = unique_ips.get(username)
 
     db.add(
         SystemStats(

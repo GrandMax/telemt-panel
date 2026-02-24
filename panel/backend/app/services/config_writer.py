@@ -41,7 +41,7 @@ def _default_template() -> dict[str, Any]:
             "metrics_whitelist": ["0.0.0.0/0"],
         },
         "censorship": {"tls_domain": settings.tls_domain, "mask": True, "mask_port": 443, "fake_cert_len": 2048},
-        "access": {"replay_check_len": 65536, "replay_window_secs": 1800, "ignore_time_skew": False},
+        "access": {"replay_check_len": 65536, "replay_window_secs": 1800, "ignore_time_skew": settings.telemt_ignore_time_skew},
         "upstreams": [{"type": "direct", "enabled": True, "weight": 10}],
     }
 
@@ -84,6 +84,7 @@ def write_config(users: list[User], config_path: str | None = None) -> None:
     users_dict, max_tcp, data_quota, expirations, max_ips = _users_for_config(users)
 
     template.setdefault("access", {})
+    template["access"]["ignore_time_skew"] = settings.telemt_ignore_time_skew
     template["access"]["users"] = users_dict
     template["access"]["user_max_tcp_conns"] = max_tcp
     template["access"]["user_data_quota"] = data_quota
