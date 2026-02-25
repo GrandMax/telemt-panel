@@ -83,6 +83,16 @@ def write_config(users: list[User], config_path: str | None = None) -> None:
     template["server"].setdefault("metrics_whitelist", ["0.0.0.0/0"])
     users_dict, max_tcp, data_quota, expirations, max_ips = _users_for_config(users)
 
+    # When DB has no users yet (first run), keep existing users from file so telemt can start
+    if not users_dict and path and os.path.isfile(path):
+        try:
+            with open(path, "rb") as f:
+                existing = tomllib.load(f)
+            if existing.get("access", {}).get("users"):
+                users_dict = existing["access"]["users"]
+        except Exception:
+            pass
+
     template.setdefault("access", {})
     template["access"]["ignore_time_skew"] = settings.telemt_ignore_time_skew
     template["access"]["users"] = users_dict
