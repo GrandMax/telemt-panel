@@ -31,8 +31,9 @@ STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 async def _metrics_loop(app: FastAPI):
     last_values: dict[str, tuple[int, int]] = {}
+    interval = max(1, settings.metrics_scrape_interval_seconds)
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(interval)
         if not settings.telemt_metrics_url:
             continue
         try:

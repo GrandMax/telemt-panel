@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     telemt_config_path: str = ""
     telemt_metrics_url: str = "http://localhost:9090/metrics"
     telemt_ignore_time_skew: bool = False  # from TELEMT_IGNORE_TIME_SKEW (true/1 = True)
+    metrics_scrape_interval_seconds: int = 60  # METRICS_SCRAPE_INTERVAL_SECONDS
     proxy_host: str = "localhost"
     proxy_port: int = 443
     tls_domain: str = "example.com"

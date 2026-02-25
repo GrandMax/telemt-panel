@@ -88,6 +88,7 @@ services:
       - PROXY_PORT=${LISTEN_PORT:-443}
       - TLS_DOMAIN=${FAKE_DOMAIN:-pikabu.ru}
       - TELEMT_IGNORE_TIME_SKEW=${TELEMT_IGNORE_TIME_SKEW:-false}
+      - METRICS_SCRAPE_INTERVAL_SECONDS=${METRICS_SCRAPE_INTERVAL_SECONDS:-60}
     networks:
       - mtpanel
 
