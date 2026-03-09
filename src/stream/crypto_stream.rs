@@ -698,6 +698,7 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for CryptoWriter<W> {
             Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
         }
 
+        // Always flush underlying writer to push any buffered ciphertext.
         Pin::new(&mut this.upstream).poll_flush(cx)
     }
 

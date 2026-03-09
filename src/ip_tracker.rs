@@ -62,25 +62,9 @@ impl UserIpTracker {
     /// * `Ok(())` - Подключение разрешено, IP добавлен в активные
     /// * `Err(String)` - Подключение отклонено с описанием причины
     pub async fn check_and_add(&self, username: &str, ip: IpAddr) -> Result<(), String> {
-        // Получаем лимит для пользователя
-        let max_ips = self.max_ips.read().await;
-        let limit = match max_ips.get(username) {
-            Some(limit) => *limit,
-            None => {
-                // Если лимит не задан - разрешаем безлимитный доступ
-                drop(max_ips);
-                let mut active_ips = self.active_ips.write().await;
-                let user_ips = active_ips
-                    .entry(username.to_string())
-                    .or_insert_with(HashSet::new);
-                user_ips.insert(ip);
-                return Ok(());
-            }
-        };
-        drop(max_ips);
-
-        // Проверяем и обновляем активные IP
-        let mut active_ips = self.active_ips.write().await;
+        // Читаем лимит и обновляем активные IP под единовременными блокировками, чтобы избежать TOCTOU.
+        let (max_guard, mut active_ips) = tokio::join!(self.max_ips.read(), self.active_ips.write());
+        let limit = max_guard.get(username).copied();
         let user_ips = active_ips
             .entry(username.to_string())
             .or_insert_with(HashSet::new);
@@ -90,19 +74,26 @@ impl UserIpTracker {
             return Ok(());
         }
 
-        // Проверяем, не превышен ли лимит
-        if user_ips.len() >= limit {
-            return Err(format!(
-                "IP limit reached for user '{}': {}/{} unique IPs already connected",
-                username,
-                user_ips.len(),
-                limit
-            ));
+        match limit {
+            None => {
+                user_ips.insert(ip);
+                Ok(())
+            }
+            Some(limit) => {
+                // Проверяем, не превышен ли лимит
+                if user_ips.len() >= limit {
+                    return Err(format!(
+                        "IP limit reached for user '{}': {}/{} unique IPs already connected",
+                        username,
+                        user_ips.len(),
+                        limit
+                    ));
+                }
+                // Лимит не превышен - добавляем новый IP
+                user_ips.insert(ip);
+                Ok(())
+            }
         }
-
-        // Лимит не превышен - добавляем новый IP
-        user_ips.insert(ip);
-        Ok(())
     }
 
     /// Удалить IP-адрес из списка активных при отключении клиента

@@ -303,14 +303,8 @@ fn encode_secure(frame: &Frame, dst: &mut BytesMut, rng: &SecureRandom) -> io::R
         return Ok(());
     }
     
-    // Generate padding to make length not divisible by 4
-    let padding_len = if data.len().is_multiple_of(4) {
-        // Add 1-3 bytes to make it non-aligned
-        rng.range(3) + 1
-    } else {
-        // Already non-aligned, can add 0-3
-        rng.range(4)
-    };
+    // Generate padding to make length not divisible by 4, using shared helper.
+    let padding_len = crate::protocol::constants::secure_padding_len(data.len(), rng);
     
     let total_len = data.len() + padding_len;
     dst.reserve(4 + total_len);

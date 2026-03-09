@@ -159,10 +159,14 @@ pub const MAX_TLS_CHUNK_SIZE: usize = 16384 + 256;
 /// Generate padding length for Secure Intermediate protocol.
 /// Total (data + padding) must not be divisible by 4 per MTProto spec.
 pub fn secure_padding_len(data_len: usize, rng: &SecureRandom) -> usize {
-    if data_len.is_multiple_of(4) {
-        rng.range(3) + 1 // 1-3
-    } else {
-        rng.range(4) // 0-3
+    // Ensure (data_len + padding) % 4 != 0 to keep padding length observable.
+    let rem = data_len % 4;
+    match rem {
+        0 => rng.range(3) + 1, // 1,2,3 → total ≡ 1,2,3
+        1 => [0usize, 1, 2][rng.range(3)], // avoid 3 (1+3 ≡ 0)
+        2 => [0usize, 1, 3][rng.range(3)], // avoid 2 (2+2 ≡ 0)
+        3 => [0usize, 2, 3][rng.range(3)], // avoid 1 (3+1 ≡ 0)
+        _ => unreachable!(),
     }
 }
 
@@ -300,9 +304,10 @@ pub mod rpc_flags {
     pub const ME_CONNECT_TIMEOUT_SECS: u64 = 5;
     pub const ME_HANDSHAKE_TIMEOUT_SECS: u64 = 10;
     
-    #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::SecureRandom;
     
     #[test]
     fn test_proto_tag_roundtrip() {
@@ -330,5 +335,17 @@ mod tests {
     fn test_datacenters_count() {
         assert_eq!(TG_DATACENTERS_V4.len(), 5);
         assert_eq!(TG_DATACENTERS_V6.len(), 5);
+    }
+
+    #[test]
+    fn secure_padding_never_produces_aligned_total() {
+        let rng = SecureRandom::new();
+        for data_len in 0..512 {
+            for _ in 0..32 {
+                let pad = secure_padding_len(data_len, &rng);
+                assert!(pad <= 3);
+                assert_ne!((data_len + pad) % 4, 0, "data_len={data_len}, pad={pad}");
+            }
+        }
     }
 }

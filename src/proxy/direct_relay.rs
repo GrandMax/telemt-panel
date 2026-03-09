@@ -4,12 +4,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::time::{timeout, Duration};
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
 use crate::config::ProxyConfig;
 use crate::crypto::SecureRandom;
-use crate::error::Result;
+use crate::error::{ProxyError, Result};
 use crate::protocol::constants::*;
 use crate::proxy::handshake::{HandshakeSuccess, encrypt_tg_nonce_with_ciphers, generate_tg_nonce};
 use crate::proxy::relay::relay_bidirectional;
@@ -176,6 +177,11 @@ async fn do_tg_handshake_static(
 
     stream.write_all(&encrypted_nonce).await?;
     stream.flush().await?;
+
+    // Ensure DC responds promptly to avoid hanging clients on half-open connections.
+    timeout(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS), stream.readable())
+        .await
+        .map_err(|_| ProxyError::ConnectionTimeout { addr: success.peer.to_string() })??;
 
     let (read_half, write_half) = stream.into_split();
 

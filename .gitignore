@@ -12,6 +12,7 @@ tests
 
 # Local install / docker-compose run dir (e.g. temp from install.sh)
 temp
+.worktrees/
 
 # Python / panel backend
 __pycache__/

@@ -35,6 +35,8 @@ pub struct MeWriter {
     pub cancel: CancellationToken,
     pub degraded: Arc<AtomicBool>,
     pub draining: Arc<AtomicBool>,
+    // Marks that writer task has fully terminated and will no longer process commands.
+    pub terminated: Arc<AtomicBool>,
 }
 
 pub struct MePool {
@@ -420,7 +422,8 @@ impl MePool {
         let cancel = CancellationToken::new();
         let degraded = Arc::new(AtomicBool::new(false));
         let draining = Arc::new(AtomicBool::new(false));
-        let (tx, mut rx) = mpsc::channel::<WriterCommand>(4096);
+        // Allow deeper queue to reduce backpressure in bursty scenarios.
+        let (tx, mut rx) = mpsc::channel::<WriterCommand>(8192);
         let tx_for_keepalive = tx.clone();
         let keepalive_random = self.me_keepalive_payload_random;
         let stats = self.stats.clone();
@@ -431,6 +434,8 @@ impl MePool {
             seq_no: 0,
         };
         let cancel_wr = cancel.clone();
+        let terminated = Arc::new(AtomicBool::new(false));
+        let terminated_task = terminated.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -463,6 +468,8 @@ impl MePool {
                     _ = cancel_wr.cancelled() => break,
                 }
             }
+            // Mark writer as fully terminated so higher layers can avoid sending into a dead channel.
+            terminated_task.store(true, Ordering::Relaxed);
         });
         let writer = MeWriter {
             id: writer_id,
@@ -471,6 +478,7 @@ impl MePool {
             cancel: cancel.clone(),
             degraded: degraded.clone(),
             draining: draining.clone(),
+            terminated: terminated.clone(),
         };
         self.writers.write().await.push(writer.clone());
         self.conn_count.fetch_add(1, Ordering::Relaxed);
@@ -625,7 +633,9 @@ impl MePool {
             if let Some(pos) = ws.iter().position(|w| w.id == writer_id) {
                 let w = ws.remove(pos);
                 w.cancel.cancel();
-                let _ = w.tx.send(WriterCommand::Close).await;
+                // Best-effort close notification; do not await on potentially stuck channel.
+                let _ = w.tx.try_send(WriterCommand::Close);
+                w.terminated.store(true, Ordering::Relaxed);
                 self.conn_count.fetch_sub(1, Ordering::Relaxed);
             }
         }
@@ -644,6 +654,7 @@ impl MePool {
         let pool = Arc::downgrade(self);
         tokio::spawn(async move {
             let deadline = Instant::now() + Duration::from_secs(300);
+            let mut sleep_secs = 1u64;
             while let Some(p) = pool.upgrade() {
                 if Instant::now() >= deadline {
                     warn!(writer_id, "Drain timeout, force-closing");
@@ -654,7 +665,8 @@ impl MePool {
                     let _ = p.remove_writer_only(writer_id).await;
                     break;
                 }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+                sleep_secs = (sleep_secs.saturating_mul(2)).min(32);
             }
         });
     }

@@ -13,7 +13,6 @@ use tracing::{debug, trace, warn};
 use crate::crypto::{AesCbc, crc32};
 use crate::error::{ProxyError, Result};
 use crate::protocol::constants::*;
-use crate::trace::TraceEvent;
 
 use super::codec::WriterCommand;
 use super::{ConnRegistry, MeResponse};
@@ -29,13 +28,12 @@ pub(crate) async fn reader_loop(
     tx: mpsc::Sender<WriterCommand>,
     ping_tracker: Arc<Mutex<HashMap<i64, (Instant, u64)>>>,
     rtt_stats: Arc<Mutex<HashMap<u64, (f64, f64)>>>,
-    writer_id: u64,
+    _writer_id: u64,
     degraded: Arc<AtomicBool>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut raw = enc_leftover;
     let mut expected_seq: i32 = 0;
-    let mut crc_errors = 0u32;
     let mut seq_mismatch = 0u32;
 
     loop {
@@ -82,13 +80,15 @@ pub(crate) async fn reader_loop(
             let frame = dec.split_to(fl);
             let pe = fl - 4;
             let ec = u32::from_le_bytes(frame[pe..pe + 4].try_into().unwrap());
-            if crc32(&frame[..pe]) != ec {
-                warn!("CRC mismatch in data frame");
-                crc_errors += 1;
-                if crc_errors > 3 {
-                    return Err(ProxyError::Proxy("Too many CRC mismatches".into()));
-                }
-                continue;
+            let ac = crc32(&frame[..pe]);
+            if ac != ec {
+                warn!(
+                    expected_crc = format_args!("0x{ec:08x}"),
+                    actual_crc = format_args!("0x{ac:08x}"),
+                    frame_len = fl,
+                    "CRC mismatch — aborting ME connection",
+                );
+                return Err(ProxyError::Proxy("CRC mismatch (crypto desync)".into()));
             }
 
             let seq_no = i32::from_le_bytes(frame[4..8].try_into().unwrap());
@@ -116,14 +116,6 @@ pub(crate) async fn reader_loop(
                 let cid = u64::from_le_bytes(body[4..12].try_into().unwrap());
                 let data = Bytes::copy_from_slice(&body[12..]);
                 trace!(cid, flags, len = data.len(), "RPC_PROXY_ANS");
-                reg.push_trace(
-                    cid,
-                    TraceEvent::new(
-                        "rpc_proxy_ans",
-                        format!("flags={flags} len={}", data.len()),
-                    ),
-                )
-                .await;
 
                 let routed = reg.route(cid, MeResponse::Data { flags, data }).await;
                 if !routed {
@@ -134,11 +126,6 @@ pub(crate) async fn reader_loop(
                 let cid = u64::from_le_bytes(body[0..8].try_into().unwrap());
                 let cfm = u32::from_le_bytes(body[8..12].try_into().unwrap());
                 trace!(cid, cfm, "RPC_SIMPLE_ACK");
-                reg.push_trace(
-                    cid,
-                    TraceEvent::new("rpc_simple_ack", format!("confirm={cfm}")),
-                )
-                .await;
 
                 let routed = reg.route(cid, MeResponse::Ack(cfm)).await;
                 if !routed {
@@ -148,24 +135,16 @@ pub(crate) async fn reader_loop(
             } else if pt == RPC_CLOSE_EXT_U32 && body.len() >= 8 {
                 let cid = u64::from_le_bytes(body[0..8].try_into().unwrap());
                 debug!(cid, "RPC_CLOSE_EXT from ME");
-                reg.push_trace(cid, TraceEvent::new("rpc_close_ext", "me requested close"))
-                    .await;
                 reg.route(cid, MeResponse::Close).await;
                 reg.unregister(cid).await;
             } else if pt == RPC_CLOSE_CONN_U32 && body.len() >= 8 {
                 let cid = u64::from_le_bytes(body[0..8].try_into().unwrap());
                 debug!(cid, "RPC_CLOSE_CONN from ME");
-                reg.push_trace(cid, TraceEvent::new("rpc_close_conn", "close connection"))
-                    .await;
                 reg.route(cid, MeResponse::Close).await;
                 reg.unregister(cid).await;
             } else if pt == RPC_PING_U32 && body.len() >= 8 {
                 let ping_id = i64::from_le_bytes(body[0..8].try_into().unwrap());
                 trace!(ping_id, "RPC_PING -> RPC_PONG");
-                reg.push_trace_for_writer(
-                    writer_id,
-                    TraceEvent::new("rpc_ping", format!("ping_id={ping_id}")),
-                ).await;
                 let mut pong = Vec::with_capacity(12);
                 pong.extend_from_slice(&RPC_PONG_U32.to_le_bytes());
                 pong.extend_from_slice(&ping_id.to_le_bytes());
@@ -175,10 +154,6 @@ pub(crate) async fn reader_loop(
                 }
             } else if pt == RPC_PONG_U32 && body.len() >= 8 {
                 let ping_id = i64::from_le_bytes(body[0..8].try_into().unwrap());
-                reg.push_trace_for_writer(
-                    writer_id,
-                    TraceEvent::new("rpc_pong", format!("ping_id={ping_id}")),
-                ).await;
                 if let Some((sent, wid)) = {
                     let mut guard = ping_tracker.lock().await;
                     guard.remove(&ping_id)
